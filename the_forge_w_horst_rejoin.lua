@@ -1,3 +1,4 @@
+print("Hello The Forge!")
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
