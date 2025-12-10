@@ -1,4 +1,4 @@
-task.wait(30)
+task.wait(15)
 print("Hello The Forge!")
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
