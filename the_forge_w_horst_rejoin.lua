@@ -1,3 +1,5 @@
+-- full open source, the forge log description only works with horst rejoin
+
 task.wait(15)
 print("PawSHOP loading...")
 task.wait(10)
