@@ -107,21 +107,22 @@ local function sendDescription()
         "⛏️: " .. pickaxeText .. ", " ..
         "🧬: " .. race
 
+    -- 🔥 LOG ทุกอย่างในนี้ (scope ถูกต้อง)
+    warn("===== Description Log =====")
+    warn("Gold Raw:", rawGold)
+    warn("Gold Formatted:", gold)
+    warn("Level:", level)
+    warn("Race:", race)
+    warn("Pickaxe:", pickaxeText)
+    warn("Final Description:", description)
+    warn("===========================")
+
     -- ส่งไปให้ Horst
     _G.Horst_SetDescription(description)
 end
 
 -- ส่งครั้งแรก
 sendDescription()
-
-    -- 🔥 LOG ทุกค่าใน Output
-    warn("===== Description Log =====")
-    warn("Gold:", rawGold)
-    warn("Level:", level)
-    warn("Race:", race)
-    warn("Pickaxe:", pickaxeText)
-    warn("Final Description:", description)
-    warn("===========================")
 
 -- ส่งทุก 40 วินาที
 task.spawn(function()
