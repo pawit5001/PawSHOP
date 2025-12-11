@@ -16,7 +16,7 @@ local function waitForPath(path)
     return current
 end
 
--- ดึง Text ปลอดภัย
+-- ดึง Text 
 local function safeText(obj)
     if obj and obj.Text and obj.Text ~= "" then
         return obj.Text
@@ -57,6 +57,7 @@ end
 -- pickaxe whitelist
 local PICKAXE_REQUIRE = {
     ["Arcane Pickaxe"] = true,
+    ["Magma Pickaxe"] = true,
     ["Demonic Pickaxe"] = true,
 }
 
@@ -81,7 +82,7 @@ local function getPickaxeStatus()
 end
 
 --------------------------------------------------------
--- ⭐ รอ Race โหลดจนไม่เป็น "X"
+-- ⭐ รอ Race โหลด
 --------------------------------------------------------
 local function waitRaceLoaded()
     local race = "X"
