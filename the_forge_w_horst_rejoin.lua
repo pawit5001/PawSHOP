@@ -114,6 +114,15 @@ end
 -- ส่งครั้งแรก
 sendDescription()
 
+    -- 🔥 LOG ทุกค่าใน Output
+    warn("===== Description Log =====")
+    warn("Gold:", rawGold)
+    warn("Level:", level)
+    warn("Race:", race)
+    warn("Pickaxe:", pickaxeText)
+    warn("Final Description:", description)
+    warn("===========================")
+
 -- ส่งทุก 40 วินาที
 task.spawn(function()
     while task.wait(40) do
