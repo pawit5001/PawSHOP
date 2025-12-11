@@ -1,9 +1,22 @@
-task.wait(15)
-print("Hello The Forge!")
+task.wait(10)
+print("PawSHOP loading...")
+task.wait(5)
+print("Log The Forge is now ready")
+
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
--- ฟังก์ชันดึงค่า Text ถ้าไม่มีให้เป็น "null"
+-- Waiting PlayerGui
+local function waitForPath(path)
+    local current = player:WaitForChild("PlayerGui", 10)
+    for child in string.gmatch(path, "[^%.]+") do
+        current = current:WaitForChild(child, 10)
+        if not current then return nil end
+    end
+    return current
+end
+
+-- ฟังก์ชันดึงค่า Text
 local function safeText(obj)
     if obj and obj.Text and obj.Text ~= "" then
         return obj.Text
@@ -12,45 +25,41 @@ local function safeText(obj)
     end
 end
 
--- Clean race → "~ Human ~" → "Human"
+-- clean race
 local function cleanRace(str)
     if not str or str == "" then return "null" end
     return str:gsub("~", ""):gsub("^%s*(.-)%s*$", "%1")
 end
 
--- ⭐ ฟอร์แมตทอง แบบย่อ มีทศนิยม 2 ตำแหน่ง เช่น 4186 -> $4.18K
+-- format gold
 local function formatGold(num)
     if not num then return "null" end
-
-    -- ถ้า num เป็น string เอา $ และ , ออก
     if type(num) == "string" then
         num = num:gsub("[%$,]", "")
     end
-
     num = tonumber(num)
     if not num then return "null" end
 
-    local formatted
+    local f
     if num >= 1e9 then
-        formatted = string.format("%.2fB", num / 1e9)
+        f = string.format("%.2fB", num / 1e9)
     elseif num >= 1e6 then
-        formatted = string.format("%.2fM", num / 1e6)
+        f = string.format("%.2fM", num / 1e6)
     elseif num >= 1e3 then
-        formatted = string.format("%.2fK", num / 1e3)
+        f = string.format("%.2fK", num / 1e3)
     else
-        formatted = tostring(num)
+        f = tostring(num)
     end
-
-    return "$" .. formatted
+    
+    return "$" .. f
 end
 
--- Pickaxe ที่ต้องตรวจสอบ
+-- pickaxe whitelist
 local PICKAXE_REQUIRE = {
     ["Arcane Pickaxe"] = true,
     ["Demonic Pickaxe"] = true,
 }
 
--- ฟังก์ชันเช็คว่า pickaxe ตาม whitelist มีไหม
 local function getPickaxeStatus()
     local path = player.PlayerGui:FindFirstChild("Menu")
         and player.PlayerGui.Menu.Frame.Frame.Menus.Tools.Frame
@@ -71,43 +80,43 @@ local function getPickaxeStatus()
     return result
 end
 
--- ฟังก์ชันส่ง Description
+-- ส่ง Description
 local function sendDescription()
-    -- gold (safeText → formatGold)
-    local rawGold = safeText(player.PlayerGui.Main.Screen.Hud:FindFirstChild("Gold"))
-    local gold = formatGold(rawGold)
+    local goldObj = waitForPath("Main.Screen.Hud.Gold")
+    local levelObj = waitForPath("Main.Screen.Hud.Level")
 
-    -- level
-    local level = safeText(player.PlayerGui.Main.Screen.Hud:FindFirstChild("Level"))
-
-    -- race
-    local raceSlot = player.PlayerGui.Sell.RaceUI.StatMain.Slots:FindFirstChild("SlotTemplate")
-    local race
-    if raceSlot then
-        local firstChild = raceSlot:FindFirstChildWhichIsA("TextLabel", true)
-        race = firstChild and cleanRace(firstChild.Text) or "null"
-    else
-        race = "null"
+    if not goldObj or not levelObj then
+        warn("Waiting for GUI… (HUD not ready)")
+        return
     end
 
-    -- pickaxe ✔️ / ❌
+    local rawGold = safeText(goldObj)
+    local gold = formatGold(rawGold)
+    local level = safeText(levelObj)
+
+    -- race safe
+    local race = "null"
+    local raceUI = player.PlayerGui:FindFirstChild("Sell")
+    if raceUI then
+        local slot = raceUI:FindFirstChildWhichIsA("TextLabel", true)
+        if slot then
+            race = cleanRace(slot.Text)
+        end
+    end
+
     local pickaxeStatus = getPickaxeStatus()
     local pickaxeText = ""
-
     for name, has in pairs(pickaxeStatus) do
-        local mark = has and "✔️" or "❌"
-        pickaxeText = pickaxeText .. name .. " " .. mark .. ", "
+        pickaxeText = pickaxeText .. name .. (has and " ✔️" or " ❌") .. ", "
     end
-    pickaxeText = pickaxeText:sub(1, #pickaxeText - 2)
+    pickaxeText = pickaxeText:sub(1, -3)
 
-    -- ⭐ รูปแบบ Final ที่ต้องการ
     local description =
         "⚔️: " .. level .. ", " ..
-	    "💰: " .. gold .. ", " ..
+        "💰: " .. gold .. ", " ..
         "⛏️: " .. pickaxeText .. ", " ..
         "🧬: " .. race
 
-    -- 🔥 LOG ทุกอย่างในนี้ (scope ถูกต้อง)
     warn("===== Description Log =====")
     warn("Gold Raw:", rawGold)
     warn("Gold Formatted:", gold)
@@ -117,14 +126,16 @@ local function sendDescription()
     warn("Final Description:", description)
     warn("===========================")
 
-    -- ส่งไปให้ Horst
     _G.Horst_SetDescription(description)
 end
 
--- ส่งครั้งแรก
-sendDescription()
+-- first send 
+task.spawn(function()
+    repeat task.wait(1) until player:FindFirstChild("PlayerGui") and player.PlayerGui:FindFirstChild("Main")
+    sendDescription()
+end)
 
--- ส่งทุก 40 วินาที
+-- send every 40 secs
 task.spawn(function()
     while task.wait(40) do
         sendDescription()
