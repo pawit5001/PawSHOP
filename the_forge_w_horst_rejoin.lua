@@ -6,7 +6,7 @@ print("Log The Forge is now ready")
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
--- Waiting PlayerGui
+-- Waiting PlayerGui path safely
 local function waitForPath(path)
     local current = player:WaitForChild("PlayerGui", 10)
     for child in string.gmatch(path, "[^%.]+") do
@@ -16,7 +16,7 @@ local function waitForPath(path)
     return current
 end
 
--- ฟังก์ชันดึงค่า Text
+-- ดึง Text ปลอดภัย
 local function safeText(obj)
     if obj and obj.Text and obj.Text ~= "" then
         return obj.Text
@@ -80,7 +80,30 @@ local function getPickaxeStatus()
     return result
 end
 
+--------------------------------------------------------
+-- ⭐ รอ Race โหลดจนไม่เป็น "X"
+--------------------------------------------------------
+local function waitRaceLoaded()
+    local race = "X"
+
+    while race == "X" or race == "" or race == nil do
+        task.wait(0.5)
+
+        local slot = waitForPath("Sell.RaceUI.StatMain.Slots.SlotTemplate")
+        if slot then
+            local label = slot:FindFirstChildWhichIsA("TextLabel", true)
+            if label then
+                race = label.Text
+            end
+        end
+    end
+
+    return race
+end
+
+--------------------------------------------------------
 -- ส่ง Description
+--------------------------------------------------------
 local function sendDescription()
     local goldObj = waitForPath("Main.Screen.Hud.Gold")
     local levelObj = waitForPath("Main.Screen.Hud.Level")
@@ -94,15 +117,9 @@ local function sendDescription()
     local gold = formatGold(rawGold)
     local level = safeText(levelObj)
 
-    -- race safe
-    local race = "null"
-    local raceUI = player.PlayerGui:FindFirstChild("Sell")
-    if raceUI then
-        local slot = raceUI:FindFirstChildWhichIsA("TextLabel", true)
-        if slot then
-            race = cleanRace(slot.Text)
-        end
-    end
+    -- ⭐ Race ถูกต้องแน่นอน (ไม่ X)
+    local raceRaw = waitRaceLoaded()
+    local race = cleanRace(raceRaw)
 
     local pickaxeStatus = getPickaxeStatus()
     local pickaxeText = ""
@@ -129,13 +146,17 @@ local function sendDescription()
     _G.Horst_SetDescription(description)
 end
 
--- first send 
+--------------------------------------------------------
+-- ส่งครั้งแรก
+--------------------------------------------------------
 task.spawn(function()
     repeat task.wait(1) until player:FindFirstChild("PlayerGui") and player.PlayerGui:FindFirstChild("Main")
     sendDescription()
 end)
 
--- send every 40 secs
+--------------------------------------------------------
+-- ส่งทุก 40 วิ
+--------------------------------------------------------
 task.spawn(function()
     while task.wait(40) do
         sendDescription()
