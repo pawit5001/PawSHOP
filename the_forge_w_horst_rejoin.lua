@@ -1,6 +1,6 @@
-task.wait(10)
+task.wait(15)
 print("PawSHOP loading...")
-task.wait(5)
+task.wait(10)
 print("Log The Forge is now ready")
 
 local Players = game:GetService("Players")
