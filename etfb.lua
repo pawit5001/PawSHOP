@@ -90,7 +90,9 @@ local function sendDescription()
         if typeof(val) == "string" or typeof(val) == "number" then return val end
         val = obj[textField]
         if typeof(val) == "string" or typeof(val) == "number" then return val end
-        return "null"
+            print("[DEBUG] Backpack summary start")
+            print("[DEBUG] Config Brainrot:", table.concat(_G.Display.Brainrot or {}, ", "))
+            print("[DEBUG] Config LuckyBox:", table.concat(_G.Display.LuckyBox or {}, ", "))
     end
 
     local speed   = safeValue(speedObj, "Text", "Value")
@@ -102,10 +104,14 @@ local function sendDescription()
         if found then
             rebirth = found
         else
+                print("[DEBUG] Item:", item.Name)
             -- fallback: ดึงตัวเลขแรกที่เจอ
+                print("[DEBUG] brainrotName:", brainrot)
             rebirth = tostring(rebirthObj.Text):match("%d+") or "null"
         end
+                        print("[DEBUG] Check brainrot config:", name)
     end
+                            print("[DEBUG] Matched brainrot:", brainrot, "with", name)
 
     local backpackLog = ""
     if brainrotSummary ~= "" then
@@ -115,9 +121,12 @@ local function sendDescription()
         if backpackLog ~= "" then
             backpackLog = backpackLog .. ", "
         end
+                print("[DEBUG] displayName:", displayName)
         backpackLog = backpackLog .. "🎁: "..luckySummary
     end
+                        print("[DEBUG] Check lucky config:", level)
 
+                            print("[DEBUG] Matched lucky:", displayName, "with", level)
     local description =
         "⚡: "..speed..", ".. 
         "🔁: "..rebirth..", ".. 
@@ -139,5 +148,7 @@ task.spawn(function()
     while true do
         sendDescription()
         task.wait(30)
+            print("[DEBUG] brainrotSummary:", brainrotSummary)
+            print("[DEBUG] luckySummary:", luckySummary)
     end
 end)
