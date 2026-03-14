@@ -10,8 +10,8 @@ local player = Players.LocalPlayer
 
 -- CONFIG
 _G.Display = _G.Display or {
-    Brainrot = {"",},
-    LuckyBox = {"",}
+    Brainrot = {""},
+    LuckyBlock = {""}
 }
 
 -- Waiting PlayerGui path safely
@@ -19,6 +19,7 @@ local function waitForPath(path)
     local current = player:WaitForChild("PlayerGui",10)
     for child in string.gmatch(path,"[^%.]+") do
         current = current:WaitForChild(child,10)
+        local backpack = player:FindFirstChild("Backpack")
         if not current then return nil end
     end
     return current
@@ -31,30 +32,40 @@ local function getBackpackSummary()
     if not backpack then return "","" end
 
     local brainrotNames = _G.Display.Brainrot or {}
-    local luckyLevels = _G.Display.LuckyBox or {}
+    local luckyLevels = _G.Display.LuckyBlock or {}
 
     local brainrotCounts = {}
     local luckyCounts = {}
 
     for _,item in ipairs(backpack:GetChildren()) do
-        local brainrot = item:GetAttribute("BrainrotName")
-        if brainrot and #brainrotNames > 0 then
+        -- ...existing code...
+        local brainrot = item and item:GetAttribute("BrainrotName") or nil
+        local displayName = item and item:GetAttribute("DisplayName") or nil
+        -- ...existing code...
+        -- เช็ค brainrotName หรือ displayName สำหรับ brainrot
+        if #brainrotNames > 0 then
             for _,name in ipairs(brainrotNames) do
-                if name ~= "" and brainrot:find(name) then
-                    local cleanName = brainrot:gsub("^%w+%s+","")
-                    cleanName = cleanName:gsub("%s*%b()","")
-                    brainrotCounts[cleanName] = (brainrotCounts[cleanName] or 0) + 1
-                    break
+                -- ...existing code...
+                if name ~= "" then
+                    local matched = false
+                    if brainrot and brainrot:find(name) then
+                        matched = true
+                        -- Always use config name as key
+                        brainrotCounts[name] = (brainrotCounts[name] or 0) + 1
+                    elseif displayName and displayName:find(name) then
+                        matched = true
+                        brainrotCounts[name] = (brainrotCounts[name] or 0) + 1
+                    end
+                    if matched then break end
                 end
             end
         end
-
-        local displayName = item:GetAttribute("DisplayName")
+        -- lucky box logic เหมือนเดิม
         if displayName and #luckyLevels > 0 then
             for _,level in ipairs(luckyLevels) do
                 if level ~= "" and displayName:find(level) then
-                    local cleanName = displayName:gsub("^%w+%s+","")
-                    cleanName = cleanName:gsub("%s*%b()","")
+                    -- Clean name to just the level (Infinity, Divine, etc.)
+                    local cleanName = level
                     luckyCounts[cleanName] = (luckyCounts[cleanName] or 0) + 1
                     break
                 end
@@ -62,16 +73,53 @@ local function getBackpackSummary()
         end
     end
 
+
     local brainrotSummary = ""
-    for name,count in pairs(brainrotCounts) do
-        if brainrotSummary ~= "" then brainrotSummary = brainrotSummary .. ", " end
-        brainrotSummary = brainrotSummary .. name .. " x"..count
+    for _,name in ipairs(brainrotNames) do
+        local found = false
+        for k,v in pairs(brainrotCounts) do
+            -- strict match: config name must be contained in cleaned name, but not partial/duplicate
+            if k == name and v > 0 then
+                if brainrotSummary ~= "" then brainrotSummary = brainrotSummary .. ", " end
+                brainrotSummary = brainrotSummary .. k .. " x" .. v
+                found = true
+                break
+            end
+        end
+        -- fallback: allow contains if strict not found
+        if not found then
+            for k,v in pairs(brainrotCounts) do
+                if k:find(name) and v > 0 then
+                    if brainrotSummary ~= "" then brainrotSummary = brainrotSummary .. ", " end
+                    brainrotSummary = brainrotSummary .. k .. " x" .. v
+                    break
+                end
+            end
+        end
     end
 
     local luckySummary = ""
-    for name,count in pairs(luckyCounts) do
-        if luckySummary ~= "" then luckySummary = luckySummary .. ", " end
-        luckySummary = luckySummary .. name .. " x"..count
+    for _,level in ipairs(luckyLevels) do
+        local found = false
+        for k,v in pairs(luckyCounts) do
+            -- strict match: config level must be contained in cleaned name, but not partial/duplicate
+            if k == level and v > 0 then
+                if luckySummary ~= "" then luckySummary = luckySummary .. ", " end
+                luckySummary = luckySummary .. k .. " x" .. v
+                found = true
+                break
+            end
+        end
+        -- fallback: allow contains if strict not found
+        if not found then
+            for k,v in pairs(luckyCounts) do
+                if k:find(level) and v > 0 then
+                    if luckySummary ~= "" then luckySummary = luckySummary .. ", " end
+                    luckySummary = luckySummary .. k .. " x" .. v
+                    break
+                end
+            end
+        end
     end
 
     return brainrotSummary,luckySummary
@@ -90,9 +138,6 @@ local function sendDescription()
         if typeof(val) == "string" or typeof(val) == "number" then return val end
         val = obj[textField]
         if typeof(val) == "string" or typeof(val) == "number" then return val end
-            print("[DEBUG] Backpack summary start")
-            print("[DEBUG] Config Brainrot:", table.concat(_G.Display.Brainrot or {}, ", "))
-            print("[DEBUG] Config LuckyBox:", table.concat(_G.Display.LuckyBox or {}, ", "))
     end
 
     local speed   = safeValue(speedObj, "Text", "Value")
@@ -104,14 +149,10 @@ local function sendDescription()
         if found then
             rebirth = found
         else
-                print("[DEBUG] Item:", item.Name)
             -- fallback: ดึงตัวเลขแรกที่เจอ
-                print("[DEBUG] brainrotName:", brainrot)
             rebirth = tostring(rebirthObj.Text):match("%d+") or "null"
         end
-                        print("[DEBUG] Check brainrot config:", name)
     end
-                            print("[DEBUG] Matched brainrot:", brainrot, "with", name)
 
     local backpackLog = ""
     if brainrotSummary ~= "" then
@@ -121,12 +162,9 @@ local function sendDescription()
         if backpackLog ~= "" then
             backpackLog = backpackLog .. ", "
         end
-                print("[DEBUG] displayName:", displayName)
         backpackLog = backpackLog .. "🎁: "..luckySummary
     end
-                        print("[DEBUG] Check lucky config:", level)
 
-                            print("[DEBUG] Matched lucky:", displayName, "with", level)
     local description =
         "⚡: "..speed..", ".. 
         "🔁: "..rebirth..", ".. 
@@ -148,7 +186,5 @@ task.spawn(function()
     while true do
         sendDescription()
         task.wait(30)
-            print("[DEBUG] brainrotSummary:", brainrotSummary)
-            print("[DEBUG] luckySummary:", luckySummary)
     end
 end)
