@@ -30,22 +30,29 @@ local function getBackpackSummary()
     local backpack = player:FindFirstChild("Backpack")
     if not backpack then return "","" end
 
-    local brainrotName = _G.Display.Brainrot
+    local brainrotNames = _G.Display.Brainrot
     local luckyLevels = _G.Display.LuckyBox
 
     local brainrotCount = 0
+    local brainrotNameFound = ""
     local luckyCount = 0
     local luckyName = ""
 
     -- ถ้า config ว่าง ไม่แสดงอะไรเลย
-    if (not brainrotName or brainrotName == "") and (not luckyLevels or #luckyLevels == 0 or (luckyLevels[1] == "")) then
+    if (not brainrotNames or #brainrotNames == 0 or (brainrotNames[1] == "")) and (not luckyLevels or #luckyLevels == 0 or (luckyLevels[1] == "")) then
         return "", ""
     end
 
     for _,item in ipairs(backpack:GetChildren()) do
         local brainrot = item:GetAttribute("BrainrotName")
-        if brainrotName and brainrotName ~= "" and brainrot and brainrot == brainrotName then
-            brainrotCount = brainrotCount + 1
+        if brainrot and brainrotNames and #brainrotNames > 0 then
+            for _,name in ipairs(brainrotNames) do
+                if name ~= "" and brainrot == name then
+                    brainrotCount = brainrotCount + 1
+                    brainrotNameFound = name
+                    break
+                end
+            end
         end
 
         local displayName = item:GetAttribute("DisplayName")
@@ -63,7 +70,7 @@ local function getBackpackSummary()
     end
 
     local brainrotSummary =
-        (brainrotName and brainrotName ~= "" and brainrotCount > 0) and (brainrotName .. " x"..brainrotCount) or ""
+        (brainrotNameFound ~= "" and brainrotCount > 0) and (brainrotNameFound .. " x"..brainrotCount) or ""
 
     local luckySummary =
         (luckyLevels and #luckyLevels > 0 and luckyLevels[1] ~= "" and luckyCount > 0) and (luckyName .. " x"..luckyCount) or ""
