@@ -10,7 +10,7 @@ local player = Players.LocalPlayer
 
 -- CONFIG
 _G.Display = _G.Display or {
-    Brainrot = "",
+    Brainrot = {"",},
     LuckyBox = {"",}
 }
 
@@ -37,16 +37,21 @@ local function getBackpackSummary()
     local luckyCount = 0
     local luckyName = ""
 
+    -- ถ้า config ว่าง ไม่แสดงอะไรเลย
+    if (not brainrotName or brainrotName == "") and (not luckyLevels or #luckyLevels == 0 or (luckyLevels[1] == "")) then
+        return "", ""
+    end
+
     for _,item in ipairs(backpack:GetChildren()) do
         local brainrot = item:GetAttribute("BrainrotName")
-        if brainrot and brainrot == brainrotName then
+        if brainrotName and brainrotName ~= "" and brainrot and brainrot == brainrotName then
             brainrotCount = brainrotCount + 1
         end
 
         local displayName = item:GetAttribute("DisplayName")
-        if displayName then
+        if displayName and luckyLevels and #luckyLevels > 0 and luckyLevels[1] ~= "" then
             for _,level in ipairs(luckyLevels) do
-                if displayName:find(level) then
+                if level ~= "" and displayName:find(level) then
                     luckyCount = luckyCount + 1
                     -- ตัด lv ออกจากชื่อ luckybox
                     local cleanName = displayName:gsub("%s*%b()","")
@@ -58,10 +63,10 @@ local function getBackpackSummary()
     end
 
     local brainrotSummary =
-        brainrotCount > 0 and (brainrotName .. " x"..brainrotCount) or ""
+        (brainrotName and brainrotName ~= "" and brainrotCount > 0) and (brainrotName .. " x"..brainrotCount) or ""
 
     local luckySummary =
-        luckyCount > 0 and (luckyName .. " x"..luckyCount) or ""
+        (luckyLevels and #luckyLevels > 0 and luckyLevels[1] ~= "" and luckyCount > 0) and (luckyName .. " x"..luckyCount) or ""
 
     return brainrotSummary,luckySummary
 end
@@ -70,9 +75,7 @@ end
 local function sendDescription()
     local speedObj   = waitForPath("HUD.BottomLeft.JumpAndSpeed.Container.EventCurrency.Value")
     local tokenObj   = waitForPath("HUD.BottomLeft.TradeTokens.Container.TradeTokens.Value")
-    local rebirthObj = waitForPath("Menus.RebirthNew.Top.CurrentRebirth.RebirthAmount")
-
-
+    local rebirthObj = waitForPath("Menus.Toggles.Rebirth.ImageButton.TextLabel")
     local brainrotSummary,luckySummary = getBackpackSummary()
 
     local function safeValue(obj, valueField, textField)
@@ -86,8 +89,17 @@ local function sendDescription()
 
     local speed   = safeValue(speedObj, "Text", "Value")
     local token   = safeValue(tokenObj, "Text", "Value")
-    local rebirthRaw = safeValue(rebirthObj, "Text", "Value")
-    local rebirth = tostring(rebirthRaw):match("%d+") or rebirthRaw
+    local rebirth = "null"
+    if rebirthObj and rebirthObj.Text then
+        -- ดึงตัวเลขจากข้อความที่อยู่ใน [] เช่น Rebirth [24]
+        local found = tostring(rebirthObj.Text):match("%[(%d+)%]")
+        if found then
+            rebirth = found
+        else
+            -- fallback: ดึงตัวเลขแรกที่เจอ
+            rebirth = tostring(rebirthObj.Text):match("%d+") or "null"
+        end
+    end
 
     local backpackLog = ""
     if brainrotSummary ~= "" then
@@ -105,14 +117,6 @@ local function sendDescription()
         "🔁: "..rebirth..", ".. 
         "💰: "..token..
         (backpackLog ~= "" and (", "..backpackLog) or "")
-
-    warn("===== Description Log =====")
-    warn("Speed:",speed)
-    warn("Rebirth:",rebirth)
-    warn("Token:",token)
-    if backpackLog ~= "" then warn("Backpack:",backpackLog) end
-    warn("Final:",description)
-    warn("===========================")
 
     if _G.Horst_SetDescription then
         _G.Horst_SetDescription(description)
