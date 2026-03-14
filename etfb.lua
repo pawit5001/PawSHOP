@@ -30,50 +30,49 @@ local function getBackpackSummary()
     local backpack = player:FindFirstChild("Backpack")
     if not backpack then return "","" end
 
-    local brainrotNames = _G.Display.Brainrot
-    local luckyLevels = _G.Display.LuckyBox
+    local brainrotNames = _G.Display.Brainrot or {}
+    local luckyLevels = _G.Display.LuckyBox or {}
 
-    local brainrotCount = 0
-    local brainrotNameFound = ""
-    local luckyCount = 0
-    local luckyName = ""
-
-    -- ถ้า config ว่าง ไม่แสดงอะไรเลย
-    if (not brainrotNames or #brainrotNames == 0 or (brainrotNames[1] == "")) and (not luckyLevels or #luckyLevels == 0 or (luckyLevels[1] == "")) then
-        return "", ""
-    end
+    local brainrotCounts = {}
+    local luckyCounts = {}
 
     for _,item in ipairs(backpack:GetChildren()) do
         local brainrot = item:GetAttribute("BrainrotName")
-        if brainrot and brainrotNames and #brainrotNames > 0 then
+        if brainrot and #brainrotNames > 0 then
             for _,name in ipairs(brainrotNames) do
-                if name ~= "" and brainrot == name then
-                    brainrotCount = brainrotCount + 1
-                    brainrotNameFound = name
+                if name ~= "" and brainrot:find(name) then
+                    local cleanName = brainrot:gsub("^%w+%s+","")
+                    cleanName = cleanName:gsub("%s*%b()","")
+                    brainrotCounts[cleanName] = (brainrotCounts[cleanName] or 0) + 1
                     break
                 end
             end
         end
 
         local displayName = item:GetAttribute("DisplayName")
-        if displayName and luckyLevels and #luckyLevels > 0 and luckyLevels[1] ~= "" then
+        if displayName and #luckyLevels > 0 then
             for _,level in ipairs(luckyLevels) do
                 if level ~= "" and displayName:find(level) then
-                    luckyCount = luckyCount + 1
-                    -- ตัด lv ออกจากชื่อ luckybox
-                    local cleanName = displayName:gsub("%s*%b()","")
-                    luckyName = cleanName
+                    local cleanName = displayName:gsub("^%w+%s+","")
+                    cleanName = cleanName:gsub("%s*%b()","")
+                    luckyCounts[cleanName] = (luckyCounts[cleanName] or 0) + 1
                     break
                 end
             end
         end
     end
 
-    local brainrotSummary =
-        (brainrotNameFound ~= "" and brainrotCount > 0) and (brainrotNameFound .. " x"..brainrotCount) or ""
+    local brainrotSummary = ""
+    for name,count in pairs(brainrotCounts) do
+        if brainrotSummary ~= "" then brainrotSummary = brainrotSummary .. ", " end
+        brainrotSummary = brainrotSummary .. name .. " x"..count
+    end
 
-    local luckySummary =
-        (luckyLevels and #luckyLevels > 0 and luckyLevels[1] ~= "" and luckyCount > 0) and (luckyName .. " x"..luckyCount) or ""
+    local luckySummary = ""
+    for name,count in pairs(luckyCounts) do
+        if luckySummary ~= "" then luckySummary = luckySummary .. ", " end
+        luckySummary = luckySummary .. name .. " x"..count
+    end
 
     return brainrotSummary,luckySummary
 end
