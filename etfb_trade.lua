@@ -685,6 +685,15 @@ local function waitForBackpackChange(targetPlayer, beforeCount, direction, timeo
     return false, countItems(targetPlayer)
 end
 
+-- Read actual token balance from HUD UI
+local function getActualTokenBalance()
+    local obj = getButtonByPath("HUD", "BottomLeft", "TradeTokens", "Container", "TradeTokens", "Value")
+    if not obj then return 0 end
+    local txt = obj.Text or ""
+    local num = tonumber(txt:match("%d+"))
+    return num or 0
+end
+
 -- Read item names from Trade UI slots
 -- side = "GiveOffer" (our side) or "RecvOffer" (other player's side)
 -- Returns table of item names found (skips empty slots)
@@ -808,12 +817,17 @@ local function doTradeBatch(receiverPlayer, uuids)
         warn("[TRADE][SENDER] ✗ No items found in GiveOffer!")
     end
 
-    -- Send Token if configured
+    -- Send Token if configured and balance sufficient
     if CFG_TOKEN_AMOUNT > 0 then
-        pcall(function()
-            RF_TradeOfferCurrency:InvokeServer(CFG_TOKEN_AMOUNT)
-        end)
-        print("[TRADE][SENDER] Offered", CFG_TOKEN_AMOUNT, "token(s)")
+        local bal = getActualTokenBalance()
+        if bal >= CFG_TOKEN_AMOUNT then
+            pcall(function()
+                RF_TradeOfferCurrency:InvokeServer(CFG_TOKEN_AMOUNT)
+            end)
+            print("[TRADE][SENDER] Offered", CFG_TOKEN_AMOUNT, "token(s) (balance:", bal, ")")
+        else
+            warn("[TRADE][SENDER] Token balance too low:", bal, "< config", CFG_TOKEN_AMOUNT, "— skipping token offer")
+        end
         task.wait(0.5)
     end
 
@@ -838,13 +852,33 @@ local function doTradeBatch(receiverPlayer, uuids)
             warn("[TRADE][SENDER] Items didn't decrease — trade may have failed")
         end
     else
-        -- Token-only: fall back to UI popup detection
-        local completed = waitForTradeCompleted(5)
-        if completed then
-            print("[TRADE][SENDER] ✓ Token-only trade completed!")
-            tradeVerified = true
+        -- Token-only: wait for Trade UI to close (more reliable than popup detection)
+        -- "Accepting" countdown can take 3-5s, then UI closes
+        print("[TRADE][SENDER] Token-only: waiting for Trade UI to close...")
+        local uiDeadline = tick() + 15
+        while tick() < uiDeadline do
+            local tradeFrame = getButtonByPath("Menus", "Trade")
+            if not tradeFrame then
+                tradeVerified = true
+                break
+            end
+            local isOpen = true
+            if tradeFrame:IsA("ScreenGui") then
+                isOpen = tradeFrame.Enabled ~= false
+            elseif tradeFrame:IsA("GuiObject") then
+                isOpen = tradeFrame.Visible ~= false
+            end
+            if not isOpen then
+                tradeVerified = true
+                break
+            end
+            task.wait(0.5)
+        end
+        if tradeVerified then
+            print("[TRADE][SENDER] ✓ Trade UI closed — token trade completed!")
         else
-            warn("[TRADE][SENDER] Trade Completed not detected — continuing anyway")
+            warn("[TRADE][SENDER] Trade UI still open after 15s — dismissing")
+            dismissTradeUI()
         end
     end
     task.wait(2)
@@ -861,12 +895,28 @@ local function runSender()
     else
         itemsPerReceiver = 0  -- 0 = send all
     end
+    -- Check actual token balance if config wants to send tokens
+    local actualTokenBalance = 0
+    if CFG_TOKEN_AMOUNT > 0 then
+        actualTokenBalance = getActualTokenBalance()
+        print("[TRADE][SENDER] Token config:", CFG_TOKEN_AMOUNT, "| Actual balance:", actualTokenBalance)
+    end
+
     -- No items but has token → token-only trade
     local tokenOnly = false
     if itemsPerReceiver <= 0 and initialCount <= 0 then
-        if CFG_TOKEN_AMOUNT > 0 then
+        if CFG_TOKEN_AMOUNT > 0 and actualTokenBalance >= CFG_TOKEN_AMOUNT then
             tokenOnly = true
             print("[TRADE][SENDER] No matching items — Token", CFG_TOKEN_AMOUNT, "→ token-only trade")
+        elseif CFG_TOKEN_AMOUNT > 0 and actualTokenBalance < CFG_TOKEN_AMOUNT then
+            local msg = "Token balance too low: have " .. actualTokenBalance .. " need " .. CFG_TOKEN_AMOUNT
+            warn("[TRADE][SENDER]", msg)
+            if _G.Horst_AccountChangeDone then
+                _G.Horst_AccountChangeDone()
+            end
+            task.wait(5)
+            localPlayer:Kick(msg)
+            return
         else
             local nameList = getNameList()
             local msg = "No items matching config: " .. table.concat(nameList, ", ")
@@ -881,6 +931,19 @@ local function runSender()
     elseif itemsPerReceiver <= 0 then
         -- send-all mode
         itemsPerReceiver = initialCount
+    end
+
+    -- Has item config but no matching items in backpack (not token-only) → done+kick
+    if not tokenOnly and initialCount <= 0 then
+        local nameList = getNameList()
+        local msg = "No items matching config: " .. table.concat(nameList, ", ")
+        warn("[TRADE][SENDER]", msg)
+        if _G.Horst_AccountChangeDone then
+            _G.Horst_AccountChangeDone()
+        end
+        task.wait(5)
+        localPlayer:Kick(msg)
+        return
     end
 
     print("[TRADE][SENDER] === SENDER === player:", localPlayer.Name)
@@ -1244,11 +1307,33 @@ local function runReceiver()
                 warn("[TRADE][RECEIVER] Items didn't increase — trade may have failed")
             end
         else
-            local completed = waitForTradeCompleted(5)
-            if completed then
-                print("[TRADE][RECEIVER] ✓ Token-only trade completed!")
+            -- Token-only: wait for Trade UI to close
+            print("[TRADE][RECEIVER] Token-only: waiting for Trade UI to close...")
+            local tokenVerified = false
+            local uiDeadline = tick() + 15
+            while tick() < uiDeadline do
+                local tradeFrame = getButtonByPath("Menus", "Trade")
+                if not tradeFrame then
+                    tokenVerified = true
+                    break
+                end
+                local isOpen = true
+                if tradeFrame:IsA("ScreenGui") then
+                    isOpen = tradeFrame.Enabled ~= false
+                elseif tradeFrame:IsA("GuiObject") then
+                    isOpen = tradeFrame.Visible ~= false
+                end
+                if not isOpen then
+                    tokenVerified = true
+                    break
+                end
+                task.wait(0.5)
+            end
+            if tokenVerified then
+                print("[TRADE][RECEIVER] ✓ Trade UI closed — token trade completed!")
             else
-                warn("[TRADE][RECEIVER] Trade Completed not detected — checking backpack anyway")
+                warn("[TRADE][RECEIVER] Trade UI still open after 15s — dismissing")
+                dismissTradeUI()
             end
         end
         task.wait(2)
