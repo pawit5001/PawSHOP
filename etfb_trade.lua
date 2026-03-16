@@ -532,8 +532,9 @@ local function fireReady(itemCount)
 end
 
 -- Click Accept on trade request (1st accept — TradeRequest.Main.Accept)
--- Waits for popup (timeout since sender may be trading with another receiver)
-local function clickAcceptTradeRequest(timeoutSec)
+-- hasPeers: optional function that returns true if relevant players are still in server
+-- If hasPeers provided: wait forever while peers exist, start timeoutSec only when peers gone
+local function clickAcceptTradeRequest(timeoutSec, hasPeers)
     timeoutSec = timeoutSec or 120
     local btn = findTradeRequestButton()
     if not btn then
@@ -545,10 +546,10 @@ local function clickAcceptTradeRequest(timeoutSec)
     local tradeRequestFrame = getButtonByPath("TradeRequest")
     local mainFrame = getButtonByPath("TradeRequest", "Main")
 
-    -- Wait for popup to appear (check frame parent and button)
-    local deadline = tick() + timeoutSec
+    -- Wait for popup to appear
+    local nopeersDeadline = nil -- starts when all peers leave
     local printed = false
-    while tick() < deadline do
+    while true do
         -- Check if popup is visible
         -- ScreenGui uses Enabled, Frame/Button uses Visible
         local isShowing = true
@@ -571,15 +572,37 @@ local function clickAcceptTradeRequest(timeoutSec)
             return false
         end
 
+        -- Timeout logic: if hasPeers → wait forever while peers exist
+        if hasPeers then
+            if hasPeers() then
+                nopeersDeadline = nil -- reset timer, peers still here
+            else
+                if not nopeersDeadline then
+                    nopeersDeadline = tick() + timeoutSec
+                    print("[TRADE] No peers in server — starting", timeoutSec, "s timeout")
+                end
+                if tick() >= nopeersDeadline then
+                    warn("[TRADE] Trade request popup never appeared (no peers + timeout", timeoutSec, "s)")
+                    return false
+                end
+            end
+        else
+            -- No hasPeers function → simple fixed timeout
+            if not nopeersDeadline then
+                nopeersDeadline = tick() + timeoutSec
+            end
+            if tick() >= nopeersDeadline then
+                warn("[TRADE] Trade request popup never appeared (timeout", timeoutSec, "s)")
+                return false
+            end
+        end
+
         if not printed then
-            print("[TRADE] Waiting for trade request popup... (timeout:", timeoutSec, "s)")
+            print("[TRADE] Waiting for trade request popup...", hasPeers and "(unlimited while peers online)" or ("(timeout: " .. timeoutSec .. "s)"))
             printed = true
         end
         task.wait(0.5)
     end
-
-    warn("[TRADE] Trade request popup never appeared (timeout", timeoutSec, "s)")
-    return false
 end
 
 -- Dismiss any open Trade UI by clicking Decline/Close
@@ -1316,20 +1339,21 @@ local function runReceiver()
 
         print("[TRADE][RECEIVER] Round", round, "/", (totalRounds or "~"), "| expected batch:", expectedBatch)
 
-        -- 1st Accept: Wait for trade request popup
+        -- 1st Accept: Wait for trade request popup (unlimited while senders online, 120s after they leave)
         local waitTimeout = 120
-        print("[TRADE][RECEIVER] Waiting for trade request popup (timeout:", waitTimeout, "s)...")
-        local gotRequest = clickAcceptTradeRequest(waitTimeout)
-        if not gotRequest then
-            -- Check if any sender is still in server
-            local anySenderHere = false
+        local function anySenderOnline()
             for _, sName in ipairs(CFG_SENDERS) do
-                if Players:FindFirstChild(sName) then anySenderHere = true; break end
+                if Players:FindFirstChild(sName) then return true end
             end
-            if not anySenderHere then
+            return false
+        end
+        print("[TRADE][RECEIVER] Waiting for trade request (unlimited while senders online)...")
+        local gotRequest = clickAcceptTradeRequest(waitTimeout, anySenderOnline)
+        if not gotRequest then
+            if not anySenderOnline() then
                 warn("[TRADE][RECEIVER] No senders left in server — stopping")
             else
-                warn("[TRADE][RECEIVER] No trade request received within timeout — stopping")
+                warn("[TRADE][RECEIVER] Trade request timeout — stopping")
             end
             break
         end
