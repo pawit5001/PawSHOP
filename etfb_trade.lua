@@ -1351,6 +1351,7 @@ local function runReceiver()
         end
 
         -- If nothing offered (0 items + 0 tokens in UI) → decline trade
+        local skipRound = false
         if #recvItems == 0 and recvTokens <= 0 then
             warn("[TRADE][RECEIVER] Sender offered nothing (0 items, 0 tokens) — declining")
             dismissTradeUI()
@@ -1360,9 +1361,10 @@ local function runReceiver()
                 warn("[TRADE][RECEIVER] 3 consecutive empty trades — stopping")
                 break
             end
-            goto continueRound
+            skipRound = true
         end
 
+        if not skipRound then
         -- Receiver clicks Accept
         fireReady(expectedBatch)
         print("[TRADE][RECEIVER] 2nd Accept: Ready done!")
@@ -1436,7 +1438,7 @@ local function runReceiver()
                 break
             end
         end
-        ::continueRound::
+        end -- if not skipRound
     end
 
     -- === Final verification (backpack before/after comparison) ===
