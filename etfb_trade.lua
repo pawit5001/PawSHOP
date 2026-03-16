@@ -688,9 +688,15 @@ end
 -- Read actual token balance from HUD UI
 local function getActualTokenBalance()
     local obj = getButtonByPath("HUD", "BottomLeft", "TradeTokens", "Container", "TradeTokens", "Value")
-    if not obj then return 0 end
+    if not obj then
+        warn("[TRADE] Token HUD not found — returning 0")
+        return 0
+    end
     local txt = obj.Text or ""
-    local num = tonumber(txt:match("%d+"))
+    -- Remove commas/spaces from formatted numbers like "1,000" or "1 000"
+    local cleaned = txt:gsub("[,%s]", "")
+    local num = tonumber(cleaned:match("%d+"))
+    print("[TRADE] Token HUD text:", txt, "→ parsed:", num or 0)
     return num or 0
 end
 
@@ -818,6 +824,8 @@ local function doTradeBatch(receiverPlayer, uuids)
     end
 
     -- Send Token if configured and balance > 0
+    local tokenOffered = false
+    local tokenAmountOffered = 0
     if CFG_TOKEN_AMOUNT > 0 then
         local bal = getActualTokenBalance()
         if bal > 0 then
@@ -826,10 +834,20 @@ local function doTradeBatch(receiverPlayer, uuids)
                 RF_TradeOfferCurrency:InvokeServer(sendAmount)
             end)
             print("[TRADE][SENDER] Offered", sendAmount, "token(s) (balance:", bal, "config:", CFG_TOKEN_AMOUNT, ")")
+            tokenOffered = true
+            tokenAmountOffered = sendAmount
         else
             warn("[TRADE][SENDER] Token balance is 0 — skipping token offer")
         end
         task.wait(0.5)
+    end
+
+    -- If nothing to trade (0 items + 0 tokens) → dismiss and abort
+    if #uuids == 0 and not tokenOffered then
+        warn("[TRADE][SENDER] Nothing to offer (0 items, 0 tokens) — aborting trade")
+        dismissTradeUI()
+        task.wait(1)
+        return false
     end
 
     -- Wait before Accept ("Trade was modified" cooldown)
@@ -883,7 +901,7 @@ local function doTradeBatch(receiverPlayer, uuids)
         end
     end
     task.wait(2)
-    return tradeVerified
+    return tradeVerified, tokenAmountOffered
 end
 
 local function runSender()
@@ -986,6 +1004,7 @@ local function runSender()
     local retryCount  = 0
     local MAX_RETRIES = 3
     local confirmedSent = 0
+    local confirmedTokenSent = 0
     if not tokenOnly then
         print("[TRADE][SENDER] Initial matching items in backpack:", initialCount)
     end
@@ -1064,13 +1083,14 @@ local function runSender()
         if batchSize > 0 or tokenOnly then
             local beforeCount = countItems(localPlayer)
 
-            local success = doTradeBatch(receiver, uuids)
+            local success, batchTokenSent = doTradeBatch(receiver, uuids)
 
             if success then
                 task.wait(2)
 
                 if tokenOnly then
-                    print("[TRADE][SENDER] Token-only trade sent to", receiver.Name)
+                    confirmedTokenSent = confirmedTokenSent + (batchTokenSent or 0)
+                    print("[TRADE][SENDER] Token-only trade sent to", receiver.Name, "(", batchTokenSent or 0, "tokens)")
                     remaining = remaining - 1
                     receiverIdx = receiverIdx + 1
                     retryCount = 0
@@ -1157,7 +1177,7 @@ local function runSender()
                 _G.Horst_AccountChangeDone()
             end
             task.wait(15)
-            local msg = "Done traded sent " .. (tokenOnly and (CFG_TOKEN_AMOUNT .. " tokens") or (confirmedSent .. " items"))
+            local msg = "Done traded sent " .. (tokenOnly and (confirmedTokenSent .. " tokens") or (confirmedSent .. " items"))
             print("[TRADE][SENDER]", msg)
             localPlayer:Kick(msg)
         end
