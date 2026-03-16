@@ -53,6 +53,9 @@ local function isEmpty(v)
 end
 
 -- Auto-fill: if Senders or Receivers is empty → fill with all server players except the other side
+local SENDERS_AUTO_FILLED = false
+local RECEIVERS_AUTO_FILLED = false
+
 local function resolveAutoFill()
     local senderEmpty   = isEmpty(ENV.Senders)
     local receiverEmpty = isEmpty(ENV.Receivers)
@@ -80,6 +83,7 @@ local function resolveAutoFill()
             end
         end
         print("[TRADE] Senders auto-filled:", #CFG_SENDERS, "player(s) =", table.concat(CFG_SENDERS, ", "))
+        SENDERS_AUTO_FILLED = true
     else
         -- Receivers = all players except Senders
         local exclude = {}
@@ -91,6 +95,7 @@ local function resolveAutoFill()
             end
         end
         print("[TRADE] Receivers auto-filled:", #CFG_RECEIVERS, "player(s) =", table.concat(CFG_RECEIVERS, ", "))
+        RECEIVERS_AUTO_FILLED = true
     end
 end
 resolveAutoFill()
@@ -547,6 +552,42 @@ local function clickAcceptTradeRequest(timeoutSec)
     return false
 end
 
+-- Dismiss any open Trade UI by clicking Decline/Close
+local function dismissTradeUI()
+    local tradeFrame = getButtonByPath("Menus", "Trade")
+    if not tradeFrame then return false end
+    -- Check if visible
+    local isVisible = true
+    if tradeFrame:IsA("ScreenGui") then
+        isVisible = tradeFrame.Enabled ~= false
+    elseif tradeFrame:IsA("GuiObject") then
+        isVisible = tradeFrame.Visible ~= false
+    end
+    if not isVisible then return false end
+    -- Try known button names
+    for _, name in ipairs({"Decline", "Close", "Cancel", "X"}) do
+        local btn = tradeFrame:FindFirstChild(name)
+        if btn and (btn:IsA("TextButton") or btn:IsA("ImageButton")) then
+            print("[TRADE] Dismissing trade UI via", name)
+            clickButton(btn, "DismissTrade." .. name)
+            task.wait(1)
+            return true
+        end
+    end
+    -- Search descendants
+    for _, desc in ipairs(tradeFrame:GetDescendants()) do
+        local lo = desc.Name:lower()
+        if (lo:find("decline") or lo:find("close") or lo:find("cancel"))
+            and (desc:IsA("TextButton") or desc:IsA("ImageButton")) then
+            print("[TRADE] Dismissing trade UI via", desc.Name)
+            clickButton(desc, "DismissTrade." .. desc.Name)
+            task.wait(1)
+            return true
+        end
+    end
+    return false
+end
+
 -- Wait for "Trade Completed!" TextLabel to appear (poll-based)
 -- Returns true if found, false on timeout
 local function waitForTradeCompleted(timeoutSec)
@@ -661,12 +702,38 @@ end
 local function doTradeBatch(receiverPlayer, uuids)
     print("[TRADE][SENDER] Sending batch to", receiverPlayer.Name, "| items:", #uuids)
 
-    -- Send Trade Request to receiver
-    local ok, err = pcall(function()
-        RF_TradeSendTrade:InvokeServer(receiverPlayer)
+    -- Dismiss any leftover trade UI from previous batch
+    dismissTradeUI()
+
+    -- Check receiver still in server
+    if not Players:FindFirstChild(receiverPlayer.Name) then
+        warn("[TRADE][SENDER] Receiver", receiverPlayer.Name, "left the server!")
+        return false
+    end
+
+    -- Send Trade Request to receiver (with timeout)
+    local invokeOk = false
+    local invokeErr = nil
+    local invokeDone = false
+    task.spawn(function()
+        local ok2, err2 = pcall(function()
+            RF_TradeSendTrade:InvokeServer(receiverPlayer)
+        end)
+        invokeOk = ok2
+        invokeErr = err2
+        invokeDone = true
     end)
-    if not ok then
-        warn("[TRADE][SENDER] RF/TradeSendTrade error:", err)
+    local invokeDeadline = tick() + 15
+    while not invokeDone and tick() < invokeDeadline do
+        task.wait(0.5)
+    end
+    if not invokeDone then
+        warn("[TRADE][SENDER] RF/TradeSendTrade timed out (15s)")
+        dismissTradeUI()
+        return false
+    end
+    if not invokeOk then
+        warn("[TRADE][SENDER] RF/TradeSendTrade error:", invokeErr)
         return false
     end
     print("[TRADE][SENDER] Trade request sent — waiting for Trade UI to open...")
@@ -731,10 +798,12 @@ local function doTradeBatch(receiverPlayer, uuids)
     print("[TRADE][SENDER] Accept/Ready done!")
 
     -- Verify trade completion via backpack change
+    local tradeVerified = false
     if #uuids > 0 then
         local changed, postCount = waitForBackpackChange(localPlayer, preAcceptCount, "decrease", 10)
         if changed then
             print("[TRADE][SENDER] ✓ Trade verified — items:", preAcceptCount, "→", postCount)
+            tradeVerified = true
         else
             warn("[TRADE][SENDER] Items didn't decrease — trade may have failed")
         end
@@ -743,12 +812,13 @@ local function doTradeBatch(receiverPlayer, uuids)
         local completed = waitForTradeCompleted(5)
         if completed then
             print("[TRADE][SENDER] ✓ Token-only trade completed!")
+            tradeVerified = true
         else
             warn("[TRADE][SENDER] Trade Completed not detected — continuing anyway")
         end
     end
     task.wait(2)
-    return true  -- caller verifies via backpack count
+    return tradeVerified
 end
 
 local function runSender()
@@ -794,7 +864,15 @@ local function runSender()
     -- Wait for all Receivers to join (max 120s)
     local receivers = waitForReceivers(120)
     if #receivers == 0 then
-        warn("[TRADE][SENDER] No Receiver found in server! (waited 120s)")
+        local msg = "No Receiver found in server (waited 120s)"
+        warn("[TRADE][SENDER]", msg)
+        if CFG_KICK_AFTER_DONE then
+            if ENV.Horst_AccountChangeDone then
+                ENV.Horst_AccountChangeDone()
+            end
+            task.wait(5)
+            localPlayer:Kick(msg)
+        end
         return
     end
     if #receivers < #CFG_RECEIVERS then
@@ -825,6 +903,16 @@ local function runSender()
         end
 
         local receiver  = receivers[receiverIdx]
+
+        -- Check receiver still in server
+        if not Players:FindFirstChild(receiver.Name) then
+            warn("[TRADE][SENDER] Receiver", receiver.Name, "left the server — skipping")
+            receiverIdx = receiverIdx + 1
+            retryCount = 0
+            if receiverIdx > #receivers then break end
+            receiver = receivers[receiverIdx]
+        end
+
         local uuids = {}
         local batchSize = 0
 
@@ -942,9 +1030,27 @@ local function runSender()
         warn("[TRADE][SENDER] Trade incomplete —", remaining, "item(s) remaining")
     end
 
-    -- Done + Kick (sender kicks only for many-senders-to-1-receiver)
+    -- Done + Kick
+    -- Auto-filled side = alts → kick. Explicitly set side = main → stay.
+    -- If neither auto-filled: sender kicks for many→1, receiver kicks otherwise.
+    -- Also: if no matching items left in backpack → always done + kick
     if CFG_KICK_AFTER_DONE and tradeOk then
-        local shouldKick = (#CFG_SENDERS > 1 and #CFG_RECEIVERS == 1)
+        local shouldKick
+        if SENDERS_AUTO_FILLED then
+            shouldKick = true  -- sender is alt (auto-filled) → kick
+        elseif RECEIVERS_AUTO_FILLED then
+            shouldKick = false -- sender is main (explicitly set) → stay
+        else
+            shouldKick = (#CFG_SENDERS > 1 and #CFG_RECEIVERS == 1)
+        end
+
+        -- If no matching items left → always done + kick regardless
+        local remainingItems = countItems(localPlayer)
+        if remainingItems <= 0 and not tokenOnly then
+            print("[TRADE][SENDER] No matching items left in backpack → done + kick")
+            shouldKick = true
+        end
+
         if shouldKick then
             print("[TRADE][SENDER] Calling done...")
             if ENV.Horst_AccountChangeDone then
@@ -1053,7 +1159,16 @@ local function runReceiver()
         print("[TRADE][RECEIVER] Waiting for trade request popup (timeout:", waitTimeout, "s)...")
         local gotRequest = clickAcceptTradeRequest(waitTimeout)
         if not gotRequest then
-            warn("[TRADE][RECEIVER] No trade request received within timeout — stopping")
+            -- Check if any sender is still in server
+            local anySenderHere = false
+            for _, sName in ipairs(CFG_SENDERS) do
+                if Players:FindFirstChild(sName) then anySenderHere = true; break end
+            end
+            if not anySenderHere then
+                warn("[TRADE][RECEIVER] No senders left in server — stopping")
+            else
+                warn("[TRADE][RECEIVER] No trade request received within timeout — stopping")
+            end
             break
         end
 
@@ -1156,7 +1271,13 @@ local function runReceiver()
         print("[TRADE][RECEIVER] ✓ Token-only mode: received", CFG_TOKEN_AMOUNT, "token(s)")
     end
 
-    local isSuccess = itemsOk or tokenOk
+    -- Partial success: got some items + tokens were configured
+    local partialOk = (not itemsOk) and (actualItems > 0) and (CFG_TOKEN_AMOUNT > 0)
+    if partialOk then
+        print("[TRADE][RECEIVER] ✓ Partial success: got", actualItems, "item(s) + tokens", CFG_TOKEN_AMOUNT)
+    end
+
+    local isSuccess = itemsOk or tokenOk or partialOk
     print("[TRADE][RECEIVER] ===", isSuccess and "SUCCESS" or "FAILED", "===")
 
     if ENV.TaskAfterGetItems then
@@ -1173,9 +1294,18 @@ local function runReceiver()
         task.spawn(ENV.TaskAfterGetItems, result)
     end
 
-    -- Done + Kick (receiver kicks unless many-senders-to-1-receiver)
+    -- Done + Kick
+    -- Auto-filled side = alts → kick. Explicitly set side = main → stay.
+    -- If neither auto-filled: receiver kicks unless many→1.
     if CFG_KICK_AFTER_DONE and isSuccess then
-        local shouldKick = not (#CFG_SENDERS > 1 and #CFG_RECEIVERS == 1)
+        local shouldKick
+        if RECEIVERS_AUTO_FILLED then
+            shouldKick = true  -- receiver is alt (auto-filled) → kick
+        elseif SENDERS_AUTO_FILLED then
+            shouldKick = false -- receiver is main (explicitly set) → stay
+        else
+            shouldKick = not (#CFG_SENDERS > 1 and #CFG_RECEIVERS == 1)
+        end
         if shouldKick then
             task.wait(8) -- wait for callback to finish
             local msg = "Done traded received " .. (tokenOnlyMode and (CFG_TOKEN_AMOUNT .. " tokens") or (actualItems .. " items"))
