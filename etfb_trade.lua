@@ -1216,14 +1216,11 @@ local function runSender()
         end
     end
 
-    -- If trade failed and KickAfterDone → done + kick with failure
+    -- If trade failed and KickAfterDone → kick only (no done callback)
     if CFG_KICK_AFTER_DONE and not tradeOk then
         local msg = "Trade incomplete — sent " .. confirmedSent .. " / " .. totalToSend
         warn("[TRADE][SENDER]", msg)
-        if _G.Horst_AccountChangeDone then
-            _G.Horst_AccountChangeDone()
-        end
-        task.wait(15)
+        task.wait(5)
         localPlayer:Kick(msg)
     end
 end
