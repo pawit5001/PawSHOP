@@ -872,16 +872,16 @@ local function doTradeBatch(receiverPlayer, uuids)
         task.wait(0.5)
     end
 
-    -- If nothing to trade (0 items + 0 tokens in UI) → dismiss and abort
-    if #uuids == 0 then
-        local uiTokens = readTradeTokens("GiveOffer")
-        if uiTokens <= 0 and not tokenOffered then
-            warn("[TRADE][SENDER] Nothing in trade (0 items, 0 tokens in UI) — aborting")
-            dismissTradeUI()
-            task.wait(1)
-            return false, 0
-        end
+    -- Final check: verify Trade UI actually has something before accepting
+    local finalUiItems = readTradeSlots("GiveOffer")
+    local finalUiTokens = readTradeTokens("GiveOffer")
+    if #finalUiItems == 0 and finalUiTokens <= 0 then
+        warn("[TRADE][SENDER] Nothing confirmed in Trade UI (0 items, 0 tokens) — aborting")
+        dismissTradeUI()
+        task.wait(1)
+        return false, 0
     end
+    print("[TRADE][SENDER] Trade UI confirmed:", #finalUiItems, "item(s),", finalUiTokens, "token(s) — proceeding")
 
     -- Wait before Accept ("Trade was modified" cooldown)
     print("[TRADE][SENDER] Waiting 2s before clicking Accept...")
