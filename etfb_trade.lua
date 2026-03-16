@@ -8,13 +8,19 @@
 --   getgenv().Receivers   = "UserC"                        -- single receiver
 --   getgenv().Receivers   = {"UserC", "UserD", "UserE"}    -- multiple receivers
 --
+--   -- If Senders or Receivers is nil, auto-fill with all server players
+--   -- except the other side. (Only one side can be nil)
+--   getgenv().Receivers   = "UserC"   -- Senders = nil → all other players become senders
+--   getgenv().Senders     = "UserA"   -- Receivers = nil → all other players become receivers
+--
 --   getgenv().ItemsName   = {"SkibidiToilet", "Cameraman"}
 --   getgenv().ItemsAmount = 3            -- per-name amount (e.g. 3 names x 3 = 9 total, 0 = send all matching)
 --   getgenv().TokenAmount = 0            -- tokens to send per batch (0 = none)
+--   getgenv().KickAfterDone = true       -- kick after trade done (default false)
 --
 -- Supported scenarios:
---   1 Sender  → many Receivers  (Senders=1 string, Receivers=table)
---   many Senders → 1 Receiver   (Senders=table, Receivers=1 string)
+--   1 Sender  → many Receivers  (Senders="name", Receivers=nil → auto-filled)
+--   many Senders → 1 Receiver   (Senders=nil → auto-filled, Receivers="name")
 --   many Senders → many Receivers (Senders=table, Receivers=table)
 -- Then loadstring / execute this script
 -- ============================================================
@@ -35,9 +41,54 @@ end
 
 local CFG_SENDERS      = toList(ENV.Senders   or {""})
 local CFG_RECEIVERS    = toList(ENV.Receivers  or {""})
+
+-- Auto-fill: if Senders or Receivers is nil → fill with all server players except the other side
+local function resolveAutoFill()
+    local senderNil   = (ENV.Senders == nil)
+    local receiverNil = (ENV.Receivers == nil)
+
+    if not senderNil and not receiverNil then return end
+
+    if senderNil and receiverNil then
+        warn("[TRADE] Both Senders and Receivers are nil! Set at least one side.")
+        return
+    end
+
+    local allPlayers = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        table.insert(allPlayers, p.Name)
+    end
+
+    if senderNil then
+        -- Senders = all players except Receivers
+        local exclude = {}
+        for _, name in ipairs(CFG_RECEIVERS) do exclude[name] = true end
+        CFG_SENDERS = {}
+        for _, name in ipairs(allPlayers) do
+            if not exclude[name] then
+                table.insert(CFG_SENDERS, name)
+            end
+        end
+        print("[TRADE] Senders=nil → auto-filled:", #CFG_SENDERS, "player(s) =", table.concat(CFG_SENDERS, ", "))
+    else
+        -- Receivers = all players except Senders
+        local exclude = {}
+        for _, name in ipairs(CFG_SENDERS) do exclude[name] = true end
+        CFG_RECEIVERS = {}
+        for _, name in ipairs(allPlayers) do
+            if not exclude[name] then
+                table.insert(CFG_RECEIVERS, name)
+            end
+        end
+        print("[TRADE] Receivers=nil → auto-filled:", #CFG_RECEIVERS, "player(s) =", table.concat(CFG_RECEIVERS, ", "))
+    end
+end
+resolveAutoFill()
+
 local CFG_ITEMS_NAME   = ENV.ItemsName   or {""}
 local CFG_ITEMS_AMOUNT_RAW = tonumber(ENV.ItemsAmount) or 0 -- per-name (0 = send all), total = ItemsAmount * #ItemsName
 local CFG_TOKEN_AMOUNT = math.max(0,  tonumber(ENV.TokenAmount) or 100)
+local CFG_KICK_AFTER_DONE = (ENV.KickAfterDone == true) -- kick player after trade done (default false)
 
 -- Callback after Receiver gets all items
 -- result = { items, itemsExpected, tokens, tokenOnly, success }
@@ -527,6 +578,32 @@ local function waitForTradeCompleted(timeoutSec)
     return false
 end
 
+-- Poll backpack until item count changes
+-- direction = "decrease" (sender) or "increase" (receiver)
+-- Returns: changed (bool), currentCount
+local function waitForBackpackChange(targetPlayer, beforeCount, direction, timeoutSec)
+    timeoutSec = timeoutSec or 10
+    local deadline = tick() + timeoutSec
+    local printed = false
+    while tick() < deadline do
+        local now = countItems(targetPlayer)
+        if direction == "decrease" and now < beforeCount then
+            print("[TRADE] ✓ Backpack decreased:", beforeCount, "→", now)
+            return true, now
+        elseif direction == "increase" and now > beforeCount then
+            print("[TRADE] ✓ Backpack increased:", beforeCount, "→", now)
+            return true, now
+        end
+        if not printed then
+            print("[TRADE] Waiting for backpack change... (timeout:", timeoutSec, "s)")
+            printed = true
+        end
+        task.wait(0.5)
+    end
+    warn("[TRADE] Backpack didn't change within", timeoutSec, "s")
+    return false, countItems(targetPlayer)
+end
+
 -- Read item names from Trade UI slots
 -- side = "GiveOffer" (our side) or "RecvOffer" (other player's side)
 -- Returns table of item names found (skips empty slots)
@@ -637,16 +714,28 @@ local function doTradeBatch(receiverPlayer, uuids)
     print("[TRADE][SENDER] Waiting 2s before clicking Accept...")
     task.wait(2)
 
+    local preAcceptCount = countItems(localPlayer)
+
     -- Sender clicks Accept
     fireReady(#uuids)
     print("[TRADE][SENDER] Accept/Ready done!")
 
-    -- Wait for "Trade Completed!" popup
-    local completed = waitForTradeCompleted(5)
-    if completed then
-        print("[TRADE][SENDER] Trade completed successfully!")
+    -- Verify trade completion via backpack change
+    if #uuids > 0 then
+        local changed, postCount = waitForBackpackChange(localPlayer, preAcceptCount, "decrease", 10)
+        if changed then
+            print("[TRADE][SENDER] ✓ Trade verified — items:", preAcceptCount, "→", postCount)
+        else
+            warn("[TRADE][SENDER] Items didn't decrease — trade may have failed")
+        end
     else
-        warn("[TRADE][SENDER] Trade Completed popup not detected — continuing anyway")
+        -- Token-only: fall back to UI popup detection
+        local completed = waitForTradeCompleted(5)
+        if completed then
+            print("[TRADE][SENDER] ✓ Token-only trade completed!")
+        else
+            warn("[TRADE][SENDER] Trade Completed not detected — continuing anyway")
+        end
     end
     task.wait(2)
     return true  -- caller verifies via backpack count
@@ -837,12 +926,28 @@ local function runSender()
         end
     end
 
+    local tradeOk = tokenOnly or (remaining <= 0)
     if tokenOnly then
         print("[TRADE][SENDER] === Token-only trade complete ===")
     elseif remaining <= 0 then
         print("[TRADE][SENDER] === All", totalToSend, "item(s) traded ===")
     else
         warn("[TRADE][SENDER] Trade incomplete —", remaining, "item(s) remaining")
+    end
+
+    -- Done + Kick (sender kicks only for many-senders-to-1-receiver)
+    if CFG_KICK_AFTER_DONE and tradeOk then
+        local shouldKick = (#CFG_SENDERS > 1 and #CFG_RECEIVERS == 1)
+        if shouldKick then
+            print("[TRADE][SENDER] Calling done...")
+            if ENV.Horst_AccountChangeDone then
+                ENV.Horst_AccountChangeDone()
+            end
+            task.wait(3)
+            local msg = "Done traded sent " .. (tokenOnly and (CFG_TOKEN_AMOUNT .. " tokens") or (confirmedSent .. " items"))
+            print("[TRADE][SENDER]", msg)
+            localPlayer:Kick(msg)
+        end
     end
 end
 
@@ -966,12 +1071,22 @@ local function runReceiver()
         -- Receiver clicks Accept
         fireReady(expectedBatch)
         print("[TRADE][RECEIVER] 2nd Accept: Ready done!")
-        -- Wait for "Trade Completed!" popup
-        local completed = waitForTradeCompleted(5)
-        if completed then
-            print("[TRADE][RECEIVER] Trade completed successfully!")
+
+        -- Verify trade completion via backpack change
+        if not tokenOnlyMode then
+            local changed, postCount = waitForBackpackChange(localPlayer, beforeCount, "increase", 10)
+            if changed then
+                print("[TRADE][RECEIVER] ✓ Trade verified — items:", beforeCount, "→", postCount)
+            else
+                warn("[TRADE][RECEIVER] Items didn't increase — trade may have failed")
+            end
         else
-            warn("[TRADE][RECEIVER] Trade Completed popup not detected — checking backpack anyway")
+            local completed = waitForTradeCompleted(5)
+            if completed then
+                print("[TRADE][RECEIVER] ✓ Token-only trade completed!")
+            else
+                warn("[TRADE][RECEIVER] Trade Completed not detected — checking backpack anyway")
+            end
         end
         task.wait(2)
 
@@ -1049,6 +1164,17 @@ local function runReceiver()
               "expected="..result.itemsExpected, "tokens="..result.tokens,
               "success="..tostring(result.success))
         task.spawn(ENV.TaskAfterGetItems, result)
+    end
+
+    -- Done + Kick (receiver kicks unless many-senders-to-1-receiver)
+    if CFG_KICK_AFTER_DONE and isSuccess then
+        local shouldKick = not (#CFG_SENDERS > 1 and #CFG_RECEIVERS == 1)
+        if shouldKick then
+            task.wait(8) -- wait for callback to finish
+            local msg = "Done traded received " .. (tokenOnlyMode and (CFG_TOKEN_AMOUNT .. " tokens") or (actualItems .. " items"))
+            print("[TRADE][RECEIVER]", msg)
+            localPlayer:Kick(msg)
+        end
     end
 end
 
