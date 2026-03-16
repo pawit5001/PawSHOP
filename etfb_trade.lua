@@ -8,10 +8,10 @@
 --   getgenv().Receivers   = "UserC"                        -- single receiver
 --   getgenv().Receivers   = {"UserC", "UserD", "UserE"}    -- multiple receivers
 --
---   -- If Senders or Receivers is nil, auto-fill with all server players
---   -- except the other side. (Only one side can be nil)
---   getgenv().Receivers   = "UserC"   -- Senders = nil → all other players become senders
---   getgenv().Senders     = "UserA"   -- Receivers = nil → all other players become receivers
+--   -- If Senders or Receivers is empty (nil, "", {""}, {}), auto-fill
+--   -- with all server players except the other side. (Only one side can be empty)
+--   getgenv().Receivers   = "UserC"   -- Senders empty → all other players become senders
+--   getgenv().Senders     = "UserA"   -- Receivers empty → all other players become receivers
 --
 --   getgenv().ItemsName   = {"SkibidiToilet", "Cameraman"}
 --   getgenv().ItemsAmount = 3            -- per-name amount (e.g. 3 names x 3 = 9 total, 0 = send all matching)
@@ -42,15 +42,25 @@ end
 local CFG_SENDERS      = toList(ENV.Senders   or {""})
 local CFG_RECEIVERS    = toList(ENV.Receivers  or {""})
 
--- Auto-fill: if Senders or Receivers is nil → fill with all server players except the other side
+-- Check if a config value is "empty" (nil, "", {""}, {})
+local function isEmpty(v)
+    if v == nil or v == "" then return true end
+    if type(v) == "table" then
+        if #v == 0 then return true end
+        if #v == 1 and v[1] == "" then return true end
+    end
+    return false
+end
+
+-- Auto-fill: if Senders or Receivers is empty → fill with all server players except the other side
 local function resolveAutoFill()
-    local senderNil   = (ENV.Senders == nil)
-    local receiverNil = (ENV.Receivers == nil)
+    local senderEmpty   = isEmpty(ENV.Senders)
+    local receiverEmpty = isEmpty(ENV.Receivers)
 
-    if not senderNil and not receiverNil then return end
+    if not senderEmpty and not receiverEmpty then return end
 
-    if senderNil and receiverNil then
-        warn("[TRADE] Both Senders and Receivers are nil! Set at least one side.")
+    if senderEmpty and receiverEmpty then
+        warn("[TRADE] Both Senders and Receivers are empty! Set at least one side.")
         return
     end
 
@@ -59,7 +69,7 @@ local function resolveAutoFill()
         table.insert(allPlayers, p.Name)
     end
 
-    if senderNil then
+    if senderEmpty then
         -- Senders = all players except Receivers
         local exclude = {}
         for _, name in ipairs(CFG_RECEIVERS) do exclude[name] = true end
@@ -69,7 +79,7 @@ local function resolveAutoFill()
                 table.insert(CFG_SENDERS, name)
             end
         end
-        print("[TRADE] Senders=nil → auto-filled:", #CFG_SENDERS, "player(s) =", table.concat(CFG_SENDERS, ", "))
+        print("[TRADE] Senders auto-filled:", #CFG_SENDERS, "player(s) =", table.concat(CFG_SENDERS, ", "))
     else
         -- Receivers = all players except Senders
         local exclude = {}
@@ -80,7 +90,7 @@ local function resolveAutoFill()
                 table.insert(CFG_RECEIVERS, name)
             end
         end
-        print("[TRADE] Receivers=nil → auto-filled:", #CFG_RECEIVERS, "player(s) =", table.concat(CFG_RECEIVERS, ", "))
+        print("[TRADE] Receivers auto-filled:", #CFG_RECEIVERS, "player(s) =", table.concat(CFG_RECEIVERS, ", "))
     end
 end
 resolveAutoFill()
@@ -761,6 +771,10 @@ local function runSender()
             local nameList = getNameList()
             local msg = "No items matching config: " .. table.concat(nameList, ", ")
             warn("[TRADE][SENDER]", msg)
+            if ENV.Horst_AccountChangeDone then
+                ENV.Horst_AccountChangeDone()
+            end
+            task.wait(5)
             localPlayer:Kick(msg)
             return
         end
@@ -844,6 +858,10 @@ local function runSender()
                     local nameList = getNameList()
                     local msg = "No items matching config: " .. table.concat(nameList, ", ") .. " (sent " .. confirmedSent .. " so far)"
                     warn("[TRADE][SENDER]", msg)
+                    if ENV.Horst_AccountChangeDone then
+                        ENV.Horst_AccountChangeDone()
+                    end
+                    task.wait(5)
                     localPlayer:Kick(msg)
                     return
                 end
