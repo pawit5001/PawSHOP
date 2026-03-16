@@ -744,6 +744,17 @@ local function readTradeSlots(side)
     return items
 end
 
+-- Read token amount from Trade UI (GiveOffer or RecvOffer side)
+-- Path: Menus > Trade > {side} > TokensInput > TextBox > .Text
+local function readTradeTokens(side)
+    local textBox = getButtonByPath("Menus", "Trade", side, "TokensInput", "TextBox")
+    if not textBox then return 0 end
+    local txt = textBox.Text or ""
+    local cleaned = txt:gsub("[,%s]", "")
+    local num = tonumber(cleaned:match("%d+"))
+    return num or 0
+end
+
 local function doTradeBatch(receiverPlayer, uuids)
     print("[TRADE][SENDER] Sending batch to", receiverPlayer.Name, "| items:", #uuids)
 
@@ -833,21 +844,33 @@ local function doTradeBatch(receiverPlayer, uuids)
             pcall(function()
                 RF_TradeOfferCurrency:InvokeServer(sendAmount)
             end)
-            print("[TRADE][SENDER] Offered", sendAmount, "token(s) (balance:", bal, "config:", CFG_TOKEN_AMOUNT, ")")
-            tokenOffered = true
-            tokenAmountOffered = sendAmount
+            task.wait(0.5)
+            -- Verify from Trade UI GiveOffer
+            local uiTokens = readTradeTokens("GiveOffer")
+            print("[TRADE][SENDER] Offered", sendAmount, "token(s) | Trade UI shows:", uiTokens, "(balance:", bal, "config:", CFG_TOKEN_AMOUNT, ")")
+            if uiTokens > 0 then
+                tokenOffered = true
+                tokenAmountOffered = uiTokens
+            else
+                -- UI says 0 despite offering — trust the offer call
+                tokenOffered = true
+                tokenAmountOffered = sendAmount
+            end
         else
             warn("[TRADE][SENDER] Token balance is 0 — skipping token offer")
         end
         task.wait(0.5)
     end
 
-    -- If nothing to trade (0 items + 0 tokens) → dismiss and abort
-    if #uuids == 0 and not tokenOffered then
-        warn("[TRADE][SENDER] Nothing to offer (0 items, 0 tokens) — aborting trade")
-        dismissTradeUI()
-        task.wait(1)
-        return false
+    -- If nothing to trade (0 items + 0 tokens in UI) → dismiss and abort
+    if #uuids == 0 then
+        local uiTokens = readTradeTokens("GiveOffer")
+        if uiTokens <= 0 and not tokenOffered then
+            warn("[TRADE][SENDER] Nothing in trade (0 items, 0 tokens in UI) — aborting")
+            dismissTradeUI()
+            task.wait(1)
+            return false, 0
+        end
     end
 
     -- Wait before Accept ("Trade was modified" cooldown)
@@ -1313,12 +1336,31 @@ local function runReceiver()
 
         -- Verify sender placed items in Trade UI
         local recvItems = readTradeSlots("RecvOffer")
+        local recvTokens = readTradeTokens("RecvOffer")
         if #recvItems > 0 then
             print("[TRADE][RECEIVER] ✓ Trade UI shows sender placed:", #recvItems, "item(s) →", table.concat(recvItems, ", "))
         else
             if not tokenOnlyMode then
                 warn("[TRADE][RECEIVER] ✗ No items found in RecvOffer!")
             end
+        end
+        if recvTokens > 0 then
+            print("[TRADE][RECEIVER] ✓ Trade UI shows sender offered:", recvTokens, "token(s)")
+        elseif tokenOnlyMode then
+            warn("[TRADE][RECEIVER] ✗ Token-only mode but RecvOffer shows 0 tokens!")
+        end
+
+        -- If nothing offered (0 items + 0 tokens in UI) → decline trade
+        if #recvItems == 0 and recvTokens <= 0 then
+            warn("[TRADE][RECEIVER] Sender offered nothing (0 items, 0 tokens) — declining")
+            dismissTradeUI()
+            task.wait(1)
+            consecutiveFail = consecutiveFail + 1
+            if consecutiveFail >= 3 then
+                warn("[TRADE][RECEIVER] 3 consecutive empty trades — stopping")
+                break
+            end
+            goto continueRound
         end
 
         -- Receiver clicks Accept
@@ -1394,6 +1436,7 @@ local function runReceiver()
                 break
             end
         end
+        ::continueRound::
     end
 
     -- === Final verification (backpack before/after comparison) ===
@@ -1421,7 +1464,7 @@ local function runReceiver()
 
     local tokenOk = tokenOnlyMode
     if tokenOnlyMode then
-        print("[TRADE][RECEIVER] ✓ Token-only mode: received", CFG_TOKEN_AMOUNT, "token(s)")
+        print("[TRADE][RECEIVER] ✓ Token-only mode: trade completed")
     end
 
     -- Partial success: got some items + tokens were configured
@@ -1437,7 +1480,7 @@ local function runReceiver()
         local result = {
             items         = actualItems,
             itemsExpected = totalNeeded > 0 and totalNeeded or actualItems,
-            tokens        = CFG_TOKEN_AMOUNT,
+            tokens        = tokenOnlyMode and CFG_TOKEN_AMOUNT or 0,
             tokenOnly     = tokenOnlyMode,
             success       = isSuccess,
         }
@@ -1461,7 +1504,7 @@ local function runReceiver()
         end
         if shouldKick then
             task.wait(8) -- wait for callback to finish
-            local msg = "Done traded received " .. (tokenOnlyMode and (CFG_TOKEN_AMOUNT .. " tokens") or (actualItems .. " items"))
+            local msg = "Done traded received " .. (tokenOnlyMode and "tokens" or (actualItems .. " items"))
             print("[TRADE][RECEIVER]", msg)
             localPlayer:Kick(msg)
         end
