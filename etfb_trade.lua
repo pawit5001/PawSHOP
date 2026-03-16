@@ -758,7 +758,10 @@ local function runSender()
             tokenOnly = true
             print("[TRADE][SENDER] No matching items — Token", CFG_TOKEN_AMOUNT, "→ token-only trade")
         else
-            warn("[TRADE][SENDER] No matching items and no token — nothing to do!")
+            local nameList = getNameList()
+            local msg = "No items matching config: " .. table.concat(nameList, ", ")
+            warn("[TRADE][SENDER]", msg)
+            localPlayer:Kick(msg)
             return
         end
     elseif itemsPerReceiver <= 0 then
@@ -839,24 +842,10 @@ local function runSender()
                         end
                     end
                     local nameList = getNameList()
-                    warn("[TRADE][SENDER] No matching items found in Backpack!")
-                    warn("[TRADE][SENDER] Looking for ItemsName =", table.concat(nameList, ", "))
-                    local bp = localPlayer:FindFirstChild("Backpack")
-                    if bp then
-                        local ch = bp:GetChildren()
-                        warn("[TRADE][SENDER] Backpack has", #ch, "item(s) — run getgenv().DebugBackpack() for details")
-                        if #ch > 0 and #ch <= 5 then
-                            for idx = 1, #ch do
-                                local it = ch[idx]
-                                warn("  [" .. idx .. "] Name=" .. it.Name
-                                    .. " BrainrotName=" .. tostring(it:GetAttribute("BrainrotName"))
-                                    .. " DisplayName=" .. tostring(it:GetAttribute("DisplayName")))
-                            end
-                        end
-                    else
-                        warn("[TRADE][SENDER] Backpack = nil!")
-                    end
-                    break
+                    local msg = "No items matching config: " .. table.concat(nameList, ", ") .. " (sent " .. confirmedSent .. " so far)"
+                    warn("[TRADE][SENDER]", msg)
+                    localPlayer:Kick(msg)
+                    return
                 end
                 if #uuids < batchSize then
                     warn("[TRADE][SENDER] Found only", #uuids, "item(s) (need", batchSize, ") — trading what's available")
