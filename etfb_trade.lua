@@ -817,16 +817,17 @@ local function doTradeBatch(receiverPlayer, uuids)
         warn("[TRADE][SENDER] ✗ No items found in GiveOffer!")
     end
 
-    -- Send Token if configured and balance sufficient
+    -- Send Token if configured and balance > 0
     if CFG_TOKEN_AMOUNT > 0 then
         local bal = getActualTokenBalance()
-        if bal >= CFG_TOKEN_AMOUNT then
+        if bal > 0 then
+            local sendAmount = math.min(bal, CFG_TOKEN_AMOUNT)
             pcall(function()
-                RF_TradeOfferCurrency:InvokeServer(CFG_TOKEN_AMOUNT)
+                RF_TradeOfferCurrency:InvokeServer(sendAmount)
             end)
-            print("[TRADE][SENDER] Offered", CFG_TOKEN_AMOUNT, "token(s) (balance:", bal, ")")
+            print("[TRADE][SENDER] Offered", sendAmount, "token(s) (balance:", bal, "config:", CFG_TOKEN_AMOUNT, ")")
         else
-            warn("[TRADE][SENDER] Token balance too low:", bal, "< config", CFG_TOKEN_AMOUNT, "— skipping token offer")
+            warn("[TRADE][SENDER] Token balance is 0 — skipping token offer")
         end
         task.wait(0.5)
     end
@@ -905,16 +906,17 @@ local function runSender()
     -- No items but has token → token-only trade
     local tokenOnly = false
     if itemsPerReceiver <= 0 and initialCount <= 0 then
-        if CFG_TOKEN_AMOUNT > 0 and actualTokenBalance >= CFG_TOKEN_AMOUNT then
+        if CFG_TOKEN_AMOUNT > 0 and actualTokenBalance > 0 then
             tokenOnly = true
-            print("[TRADE][SENDER] No matching items — Token", CFG_TOKEN_AMOUNT, "→ token-only trade")
-        elseif CFG_TOKEN_AMOUNT > 0 and actualTokenBalance < CFG_TOKEN_AMOUNT then
-            local msg = "Token balance too low: have " .. actualTokenBalance .. " need " .. CFG_TOKEN_AMOUNT
+            local sendAmount = math.min(actualTokenBalance, CFG_TOKEN_AMOUNT)
+            print("[TRADE][SENDER] No matching items — Token-only trade: sending", sendAmount, "(balance:", actualTokenBalance, "config:", CFG_TOKEN_AMOUNT, ")")
+        elseif CFG_TOKEN_AMOUNT > 0 and actualTokenBalance <= 0 then
+            local msg = "Token balance is 0 — nothing to send"
             warn("[TRADE][SENDER]", msg)
             if _G.Horst_AccountChangeDone then
                 _G.Horst_AccountChangeDone()
             end
-            task.wait(5)
+            task.wait(10)
             localPlayer:Kick(msg)
             return
         else
@@ -924,7 +926,7 @@ local function runSender()
             if _G.Horst_AccountChangeDone then
                 _G.Horst_AccountChangeDone()
             end
-            task.wait(5)
+            task.wait(10)
             localPlayer:Kick(msg)
             return
         end
@@ -941,7 +943,7 @@ local function runSender()
         if _G.Horst_AccountChangeDone then
             _G.Horst_AccountChangeDone()
         end
-        task.wait(5)
+        task.wait(10)
         localPlayer:Kick(msg)
         return
     end
@@ -963,7 +965,7 @@ local function runSender()
             if _G.Horst_AccountChangeDone then
                 _G.Horst_AccountChangeDone()
             end
-            task.wait(5)
+            task.wait(10)
             localPlayer:Kick(msg)
         end
         return
@@ -1042,7 +1044,7 @@ local function runSender()
                     if _G.Horst_AccountChangeDone then
                         _G.Horst_AccountChangeDone()
                     end
-                    task.wait(5)
+                    task.wait(10)
                     localPlayer:Kick(msg)
                     return
                 end
@@ -1149,7 +1151,7 @@ local function runSender()
             if _G.Horst_AccountChangeDone then
                 _G.Horst_AccountChangeDone()
             end
-            task.wait(3)
+            task.wait(10)
             local msg = "Done traded sent " .. (tokenOnly and (CFG_TOKEN_AMOUNT .. " tokens") or (confirmedSent .. " items"))
             print("[TRADE][SENDER]", msg)
             localPlayer:Kick(msg)
@@ -1163,7 +1165,7 @@ local function runSender()
         if _G.Horst_AccountChangeDone then
             _G.Horst_AccountChangeDone()
         end
-        task.wait(5)
+        task.wait(10)
         localPlayer:Kick(msg)
     end
 end
