@@ -1282,15 +1282,13 @@ local function runReceiver()
         end
     end
 
-    -- Calculate totalRounds: senders x batches per sender
+    -- totalRounds: only used as cap when we know exact amount; otherwise unlimited
     local totalRounds
-    if tokenOnlyMode then
-        totalRounds = #senderPlayers * 10
-    elseif totalNeeded > 0 then
+    if totalNeeded > 0 then
         local batchesPerSender = math.ceil((itemsPerSender > 0 and itemsPerSender or 9) / 9)
         totalRounds = batchesPerSender * #senderPlayers
     else
-        totalRounds = 20
+        totalRounds = nil -- unlimited (token-only / send-all)
     end
     local totalReceived = 0
     local consecutiveFail = 0
@@ -1298,9 +1296,12 @@ local function runReceiver()
     local initialReceiverCount = countItems(localPlayer)
     print("[TRADE][RECEIVER] Expected total:",
           totalNeeded > 0 and totalNeeded or "unknown(send all)",
-          "items | rounds:", totalRounds)
+          "items | rounds:", totalRounds or "unlimited")
 
-    for round = 1, totalRounds do
+    local round = 0
+    while true do
+        round = round + 1
+        if totalRounds and round > totalRounds then break end
         -- Calculate expected batch size for this round
         local expectedBatch
         if totalNeeded > 0 then
@@ -1316,7 +1317,7 @@ local function runReceiver()
             end
         end
 
-        print("[TRADE][RECEIVER] Round", round, "/", totalRounds, "| expected batch:", expectedBatch)
+        print("[TRADE][RECEIVER] Round", round, "/", (totalRounds or "~"), "| expected batch:", expectedBatch)
 
         -- 1st Accept: Wait for trade request popup
         local waitTimeout = 120
