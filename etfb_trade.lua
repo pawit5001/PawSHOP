@@ -115,8 +115,8 @@ if not ENV.TaskAfterGetItems then
               "| tokens:", result.tokens or 0,
               "| success:", result.success and "YES" or "NO")
         task.wait(5)
-        if ENV.Horst_AccountChangeDone then
-            ENV.Horst_AccountChangeDone()
+        if _G.Horst_AccountChangeDone then
+            _G.Horst_AccountChangeDone()
         end
     end
 end
@@ -340,6 +340,21 @@ end
 local function waitForReceivers(timeoutSec)
     local deadline = tick() + timeoutSec
     while tick() < deadline do
+        -- Re-resolve auto-fill if receivers were auto-filled (new players may have joined)
+        if RECEIVERS_AUTO_FILLED then
+            local exclude = {}
+            for _, name in ipairs(CFG_SENDERS) do exclude[name] = true end
+            local fresh = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if not exclude[p.Name] then
+                    table.insert(fresh, p.Name)
+                end
+            end
+            if #fresh > #CFG_RECEIVERS then
+                CFG_RECEIVERS = fresh
+                print("[TRADE] Receivers re-filled:", #CFG_RECEIVERS, "player(s) =", table.concat(CFG_RECEIVERS, ", "))
+            end
+        end
         local found = getReceiverPlayers()
         if #found == #CFG_RECEIVERS then return found end
         task.wait(1)
@@ -362,6 +377,21 @@ end
 local function waitForAnySender(timeoutSec)
     local deadline = tick() + timeoutSec
     while tick() < deadline do
+        -- Re-resolve auto-fill if senders were auto-filled (new players may have joined)
+        if SENDERS_AUTO_FILLED then
+            local exclude = {}
+            for _, name in ipairs(CFG_RECEIVERS) do exclude[name] = true end
+            local fresh = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if not exclude[p.Name] then
+                    table.insert(fresh, p.Name)
+                end
+            end
+            if #fresh > #CFG_SENDERS then
+                CFG_SENDERS = fresh
+                print("[TRADE] Senders re-filled:", #CFG_SENDERS, "player(s) =", table.concat(CFG_SENDERS, ", "))
+            end
+        end
         local found = getSenderPlayers()
         if #found > 0 then return found end
         task.wait(1)
@@ -841,8 +871,8 @@ local function runSender()
             local nameList = getNameList()
             local msg = "No items matching config: " .. table.concat(nameList, ", ")
             warn("[TRADE][SENDER]", msg)
-            if ENV.Horst_AccountChangeDone then
-                ENV.Horst_AccountChangeDone()
+            if _G.Horst_AccountChangeDone then
+                _G.Horst_AccountChangeDone()
             end
             task.wait(5)
             localPlayer:Kick(msg)
@@ -867,8 +897,8 @@ local function runSender()
         local msg = "No Receiver found in server (waited 120s)"
         warn("[TRADE][SENDER]", msg)
         if CFG_KICK_AFTER_DONE then
-            if ENV.Horst_AccountChangeDone then
-                ENV.Horst_AccountChangeDone()
+            if _G.Horst_AccountChangeDone then
+                _G.Horst_AccountChangeDone()
             end
             task.wait(5)
             localPlayer:Kick(msg)
@@ -946,8 +976,8 @@ local function runSender()
                     local nameList = getNameList()
                     local msg = "No items matching config: " .. table.concat(nameList, ", ") .. " (sent " .. confirmedSent .. " so far)"
                     warn("[TRADE][SENDER]", msg)
-                    if ENV.Horst_AccountChangeDone then
-                        ENV.Horst_AccountChangeDone()
+                    if _G.Horst_AccountChangeDone then
+                        _G.Horst_AccountChangeDone()
                     end
                     task.wait(5)
                     localPlayer:Kick(msg)
@@ -1021,10 +1051,10 @@ local function runSender()
         end
     end
 
-    local tradeOk = tokenOnly or (remaining <= 0)
-    if tokenOnly then
+    local tradeOk = (remaining <= 0)
+    if tokenOnly and tradeOk then
         print("[TRADE][SENDER] === Token-only trade complete ===")
-    elseif remaining <= 0 then
+    elseif tradeOk then
         print("[TRADE][SENDER] === All", totalToSend, "item(s) traded ===")
     else
         warn("[TRADE][SENDER] Trade incomplete —", remaining, "item(s) remaining")
@@ -1053,14 +1083,25 @@ local function runSender()
 
         if shouldKick then
             print("[TRADE][SENDER] Calling done...")
-            if ENV.Horst_AccountChangeDone then
-                ENV.Horst_AccountChangeDone()
+            if _G.Horst_AccountChangeDone then
+                _G.Horst_AccountChangeDone()
             end
             task.wait(3)
             local msg = "Done traded sent " .. (tokenOnly and (CFG_TOKEN_AMOUNT .. " tokens") or (confirmedSent .. " items"))
             print("[TRADE][SENDER]", msg)
             localPlayer:Kick(msg)
         end
+    end
+
+    -- If trade failed and KickAfterDone → done + kick with failure
+    if CFG_KICK_AFTER_DONE and not tradeOk then
+        local msg = "Trade incomplete — sent " .. confirmedSent .. " / " .. totalToSend
+        warn("[TRADE][SENDER]", msg)
+        if _G.Horst_AccountChangeDone then
+            _G.Horst_AccountChangeDone()
+        end
+        task.wait(5)
+        localPlayer:Kick(msg)
     end
 end
 
