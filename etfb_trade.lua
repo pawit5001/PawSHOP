@@ -841,20 +841,30 @@ local function doTradeBatch(receiverPlayer, uuids)
         local bal = getActualTokenBalance()
         if bal > 0 then
             local sendAmount = math.min(bal, CFG_TOKEN_AMOUNT)
-            pcall(function()
-                RF_TradeOfferCurrency:InvokeServer(sendAmount)
-            end)
-            task.wait(0.5)
-            -- Verify from Trade UI GiveOffer
-            local uiTokens = readTradeTokens("GiveOffer")
-            print("[TRADE][SENDER] Offered", sendAmount, "token(s) | Trade UI shows:", uiTokens, "(balance:", bal, "config:", CFG_TOKEN_AMOUNT, ")")
+            -- Try offering tokens up to 3 times until Trade UI confirms
+            local offerRetries = 3
+            local uiTokens = 0
+            for attempt = 1, offerRetries do
+                pcall(function()
+                    RF_TradeOfferCurrency:InvokeServer(sendAmount)
+                end)
+                task.wait(1)
+                uiTokens = readTradeTokens("GiveOffer")
+                print("[TRADE][SENDER] Token offer attempt", attempt, ":", sendAmount, "token(s) | Trade UI shows:", uiTokens)
+                if uiTokens > 0 then
+                    break
+                end
+                if attempt < offerRetries then
+                    warn("[TRADE][SENDER] Trade UI shows 0 — retrying token offer...")
+                    task.wait(0.5)
+                end
+            end
+            print("[TRADE][SENDER] Token offer result: UI=", uiTokens, "(balance:", bal, "config:", CFG_TOKEN_AMOUNT, ")")
             if uiTokens > 0 then
                 tokenOffered = true
                 tokenAmountOffered = uiTokens
             else
-                -- UI says 0 despite offering — trust the offer call
-                tokenOffered = true
-                tokenAmountOffered = sendAmount
+                warn("[TRADE][SENDER] Token offer failed after", offerRetries, "attempts — UI still shows 0")
             end
         else
             warn("[TRADE][SENDER] Token balance is 0 — skipping token offer")
@@ -1275,7 +1285,7 @@ local function runReceiver()
     -- Calculate totalRounds: senders x batches per sender
     local totalRounds
     if tokenOnlyMode then
-        totalRounds = #senderPlayers
+        totalRounds = #senderPlayers * 10
     elseif totalNeeded > 0 then
         local batchesPerSender = math.ceil((itemsPerSender > 0 and itemsPerSender or 9) / 9)
         totalRounds = batchesPerSender * #senderPlayers
@@ -1418,9 +1428,9 @@ local function runReceiver()
 
         if gained <= 0 then
             if tokenOnlyMode then
-                print("[TRADE][RECEIVER] Token-only mode: no items but got token — success!")
-                break
-            end
+                print("[TRADE][RECEIVER] Token-only round: no items (token trade) — continuing...")
+                consecutiveFail = 0
+            else
             consecutiveFail = consecutiveFail + 1
             warn("[TRADE][RECEIVER] Round", round, "no items gained — trade likely failed (fail", consecutiveFail, "/ 3 )")
             if consecutiveFail >= 3 then
@@ -1431,6 +1441,7 @@ local function runReceiver()
                 end
                 break
             end
+            end -- else (not tokenOnlyMode)
         else
             consecutiveFail = 0
             if totalNeeded > 0 and totalReceived >= totalNeeded then
@@ -1514,7 +1525,45 @@ local function runReceiver()
 end
 
 
+-- =================== Wait for Game Data ===================
+
+local function waitForGameLoad()
+    print("[TRADE] Waiting for game data to load...")
+    -- Wait for Backpack to exist
+    local backpack = localPlayer:WaitForChild("Backpack", 30)
+    if backpack then
+        -- Wait for items to appear (up to 10s), in case just joined
+        local deadline = tick() + 10
+        local lastCount = -1
+        while tick() < deadline do
+            local c = #backpack:GetChildren()
+            if c > 0 and c == lastCount then
+                break -- items stabilized
+            end
+            lastCount = c
+            task.wait(1)
+        end
+        -- Extra stabilization
+        task.wait(2)
+    end
+    -- Wait for token HUD to appear if config needs tokens
+    if CFG_TOKEN_AMOUNT > 0 then
+        local deadline = tick() + 10
+        while tick() < deadline do
+            local obj = getButtonByPath("HUD", "BottomLeft", "TradeTokens", "Container", "TradeTokens", "Value")
+            if obj and obj.Text and obj.Text ~= "" then
+                print("[TRADE] Token HUD loaded:", obj.Text)
+                break
+            end
+            task.wait(1)
+        end
+    end
+    print("[TRADE] Game data loaded! Backpack:", countItems(localPlayer), "items | Token:", getActualTokenBalance())
+end
+
 -- =================== Entry Point ===================
+
+waitForGameLoad()
 
 if isSender then
     runSender()
