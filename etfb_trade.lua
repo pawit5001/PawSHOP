@@ -916,7 +916,7 @@ local function runSender()
             if _G.Horst_AccountChangeDone then
                 _G.Horst_AccountChangeDone()
             end
-            task.wait(10)
+            task.wait(15)
             localPlayer:Kick(msg)
             return
         else
@@ -926,7 +926,7 @@ local function runSender()
             if _G.Horst_AccountChangeDone then
                 _G.Horst_AccountChangeDone()
             end
-            task.wait(10)
+            task.wait(15)
             localPlayer:Kick(msg)
             return
         end
@@ -943,7 +943,7 @@ local function runSender()
         if _G.Horst_AccountChangeDone then
             _G.Horst_AccountChangeDone()
         end
-        task.wait(10)
+        task.wait(15)
         localPlayer:Kick(msg)
         return
     end
@@ -965,7 +965,7 @@ local function runSender()
             if _G.Horst_AccountChangeDone then
                 _G.Horst_AccountChangeDone()
             end
-            task.wait(10)
+            task.wait(15)
             localPlayer:Kick(msg)
         end
         return
@@ -1012,7 +1012,12 @@ local function runSender()
         local batchSize = 0
 
         if tokenOnly then
-            -- token-only: no items to collect
+            -- token-only: re-check balance before each trade
+            local bal = getActualTokenBalance()
+            if bal <= 0 then
+                print("[TRADE][SENDER] Token balance is 0 — no more tokens to send")
+                break
+            end
             batchSize = 0
         else
             local alreadySent = sentPerReceiver[receiverIdx] or 0
@@ -1044,7 +1049,7 @@ local function runSender()
                     if _G.Horst_AccountChangeDone then
                         _G.Horst_AccountChangeDone()
                     end
-                    task.wait(10)
+                    task.wait(15)
                     localPlayer:Kick(msg)
                     return
                 end
@@ -1151,7 +1156,7 @@ local function runSender()
             if _G.Horst_AccountChangeDone then
                 _G.Horst_AccountChangeDone()
             end
-            task.wait(10)
+            task.wait(15)
             local msg = "Done traded sent " .. (tokenOnly and (CFG_TOKEN_AMOUNT .. " tokens") or (confirmedSent .. " items"))
             print("[TRADE][SENDER]", msg)
             localPlayer:Kick(msg)
@@ -1165,7 +1170,7 @@ local function runSender()
         if _G.Horst_AccountChangeDone then
             _G.Horst_AccountChangeDone()
         end
-        task.wait(10)
+        task.wait(15)
         localPlayer:Kick(msg)
     end
 end
