@@ -941,15 +941,58 @@ local function doTradeBatch(receiverPlayer, uuids)
     fireReady(#uuids)
     print("[TRADE][SENDER] Accept/Ready done!")
 
-    -- Verify trade completion via backpack change
+    -- Verify trade completion via multiple signals
     local tradeVerified = false
     if #uuids > 0 then
-        local changed, postCount = waitForBackpackChange(localPlayer, preAcceptCount, "decrease", 10)
-        if changed then
-            print("[TRADE][SENDER] ✓ Trade verified — items:", preAcceptCount, "→", postCount)
-            tradeVerified = true
-        else
-            warn("[TRADE][SENDER] Items didn't decrease — trade may have failed")
+        -- Check multiple signals in a combined loop: backpack decrease, Trade Completed popup, Trade UI close
+        local checkDeadline = tick() + 15
+        while tick() < checkDeadline and not tradeVerified do
+            -- Signal 1: backpack decreased
+            local nowCount = countItems(localPlayer)
+            if nowCount < preAcceptCount then
+                print("[TRADE][SENDER] ✓ Trade verified — items:", preAcceptCount, "→", nowCount)
+                tradeVerified = true
+                break
+            end
+            -- Signal 2: "Trade Completed!" popup
+            local pg = localPlayer:FindFirstChild("PlayerGui")
+            if pg then
+                for _, desc in ipairs(pg:GetDescendants()) do
+                    if desc:IsA("TextLabel") and desc.Visible and desc.Text then
+                        local txt = desc.Text:gsub("<[^>]+>", "")
+                        if txt:lower():find("trade completed") then
+                            tradeVerified = true
+                            break
+                        end
+                    end
+                end
+            end
+            if tradeVerified then
+                print("[TRADE][SENDER] ✓ Trade verified via 'Trade Completed!' popup")
+                break
+            end
+            -- Signal 3: Trade UI closed/hidden
+            local tradeFrame = getButtonByPath("Menus", "Trade")
+            if not tradeFrame then
+                print("[TRADE][SENDER] ✓ Trade UI gone — trade completed")
+                tradeVerified = true
+                break
+            end
+            local isOpen = true
+            if tradeFrame:IsA("ScreenGui") then
+                isOpen = tradeFrame.Enabled ~= false
+            elseif tradeFrame:IsA("GuiObject") then
+                isOpen = tradeFrame.Visible ~= false
+            end
+            if not isOpen then
+                print("[TRADE][SENDER] ✓ Trade UI hidden — trade completed")
+                tradeVerified = true
+                break
+            end
+            task.wait(0.5)
+        end
+        if not tradeVerified then
+            warn("[TRADE][SENDER] No trade completion signal detected within 15s")
         end
     else
         -- Token-only: wait for Trade UI to close (more reliable than popup detection)
@@ -1075,7 +1118,7 @@ local function runSender()
     local remaining   = totalToSend
     local receiverIdx = 1
     local retryCount  = 0
-    local MAX_RETRIES = 3
+    local MAX_RETRIES = 10
     local confirmedSent = 0
     local confirmedTokenSent = 0
     if not tokenOnly then
@@ -1156,57 +1199,87 @@ local function runSender()
 
             local success, batchTokenSent = doTradeBatch(receiver, uuids)
 
-            if success then
-                task.wait(2)
+            task.wait(2)
 
-                if tokenOnly then
-                    confirmedTokenSent = confirmedTokenSent + (batchTokenSent or 0)
-                    print("[TRADE][SENDER] Token-only trade sent to", receiver.Name, "(", batchTokenSent or 0, "tokens)")
-                    remaining = remaining - 1
-                    receiverIdx = receiverIdx + 1
+            if tokenOnly then
+                confirmedTokenSent = confirmedTokenSent + (batchTokenSent or 0)
+                print("[TRADE][SENDER] Token-only trade sent to", receiver.Name, "(", batchTokenSent or 0, "tokens)")
+                remaining = remaining - 1
+                receiverIdx = receiverIdx + 1
+                retryCount = 0
+            else
+                -- Always verify by checking actual backpack count (regardless of doTradeBatch result)
+                local afterCount = countItems(localPlayer)
+                local actualSent = beforeCount - afterCount
+                print("[TRADE][SENDER] Verify: before=", beforeCount, "after=", afterCount, "sent=", actualSent)
+
+                if actualSent > 0 then
+                    confirmedSent = confirmedSent + actualSent
+                    remaining = remaining - actualSent
+                    sentPerReceiver[receiverIdx] = (sentPerReceiver[receiverIdx] or 0) + actualSent
+                    local totalSent = totalToSend - remaining
+                    print("[TRADE][SENDER] Trade success! Sent", actualSent, "| total:", totalSent)
+                    if (sentPerReceiver[receiverIdx] or 0) >= itemsPerReceiver then
+                        print("[TRADE][SENDER] Receiver", receiver.Name, "got full", itemsPerReceiver, "→ next receiver")
+                        receiverIdx = receiverIdx + 1
+                    end
                     retryCount = 0
-                else
-                    -- Verify our items decreased
-                    local afterCount = countItems(localPlayer)
-                    local actualSent = beforeCount - afterCount
-                    print("[TRADE][SENDER] Verify: before=", beforeCount, "after=", afterCount, "sent=", actualSent)
-
+                    if remaining > 0 then
+                        print("[TRADE][SENDER] Remaining:", remaining, "— waiting 3s...")
+                        task.wait(3)
+                    end
+                elseif success then
+                    -- doTradeBatch said success (Trade Completed detected) but backpack count unchanged yet
+                    -- Give extra time for backpack to update
+                    print("[TRADE][SENDER] Trade reported success but backpack unchanged — waiting 5s for sync...")
+                    task.wait(5)
+                    afterCount = countItems(localPlayer)
+                    actualSent = beforeCount - afterCount
                     if actualSent > 0 then
                         confirmedSent = confirmedSent + actualSent
                         remaining = remaining - actualSent
                         sentPerReceiver[receiverIdx] = (sentPerReceiver[receiverIdx] or 0) + actualSent
-                        local totalSent = totalToSend - remaining
-                        print("[TRADE][SENDER] Trade success! Sent", actualSent, "| total:", totalSent)
+                        print("[TRADE][SENDER] ✓ Delayed verify: sent", actualSent)
                         if (sentPerReceiver[receiverIdx] or 0) >= itemsPerReceiver then
-                            print("[TRADE][SENDER] Receiver", receiver.Name, "got full", itemsPerReceiver, "→ next receiver")
                             receiverIdx = receiverIdx + 1
                         end
                         retryCount = 0
-                        if remaining > 0 then
-                            print("[TRADE][SENDER] Remaining:", remaining, "— waiting 3s...")
-                            task.wait(3)
-                        end
                     else
-                        retryCount = retryCount + 1
-                        warn("[TRADE][SENDER] No items sent — trade likely failed (retry", retryCount, "/", MAX_RETRIES, ")")
-                        if retryCount >= MAX_RETRIES then
-                            warn("[TRADE][SENDER] Max retries", MAX_RETRIES, "— skipping to next receiver")
+                        -- Trust the Trade Completed signal
+                        local trustSent = #uuids
+                        confirmedSent = confirmedSent + trustSent
+                        remaining = remaining - trustSent
+                        sentPerReceiver[receiverIdx] = (sentPerReceiver[receiverIdx] or 0) + trustSent
+                        print("[TRADE][SENDER] ✓ Trusting Trade Completed signal — counted", trustSent, "item(s)")
+                        if (sentPerReceiver[receiverIdx] or 0) >= itemsPerReceiver then
                             receiverIdx = receiverIdx + 1
+                        end
+                        retryCount = 0
+                    end
+                    if remaining > 0 then
+                        task.wait(3)
+                    end
+                else
+                    retryCount = retryCount + 1
+                    warn("[TRADE][SENDER] No items sent (attempt", retryCount, "/", MAX_RETRIES, ")")
+                    if retryCount >= MAX_RETRIES then
+                        -- Check total backpack vs initial for untracked sends
+                        local nowTotal = countItems(localPlayer)
+                        local totalDisappeared = initialCount - nowTotal
+                        local untracked = totalDisappeared - confirmedSent
+                        if untracked > 0 then
+                            print("[TRADE][SENDER] Found", untracked, "untracked item(s) that left backpack — counting")
+                            confirmedSent = confirmedSent + untracked
+                            remaining = remaining - untracked
                             retryCount = 0
                         else
-                            task.wait(3)
+                            warn("[TRADE][SENDER] Max retries", MAX_RETRIES, "with no progress — skipping to next receiver")
+                            receiverIdx = receiverIdx + 1
+                            retryCount = 0
                         end
+                    else
+                        task.wait(3)
                     end
-                end
-            else
-                retryCount = retryCount + 1
-                warn("[TRADE][SENDER] Trade failed with", receiver.Name, "(retry", retryCount, "/", MAX_RETRIES, ")")
-                if retryCount >= MAX_RETRIES then
-                    warn("[TRADE][SENDER] Skipping to next receiver")
-                    receiverIdx = receiverIdx + 1
-                    retryCount = 0
-                else
-                    task.wait(3)
                 end
             end
         end
