@@ -351,6 +351,13 @@ local function countItems(targetPlayer)
     return count
 end
 
+-- Count ALL children in a player's Backpack (total items regardless of config filter)
+local function getTotalBackpackCount(targetPlayer)
+    local backpack = targetPlayer:FindFirstChild("Backpack")
+    if not backpack then return 0 end
+    return #backpack:GetChildren()
+end
+
 -- Get Player objects of Receivers currently in server
 local function getReceiverPlayers()
     local list = {}
@@ -436,6 +443,36 @@ local function getButtonByPath(...)
         if not current then return nil end
     end
     return current
+end
+
+-- Read backpack capacity from BagCountLabel UI (local player only)
+local function getBackpackCapacity()
+    local label = getButtonByPath("BackpackGui", "Backpack", "Inventory", "BagCountLabel")
+    if not label then
+        local pg = localPlayer:FindFirstChild("PlayerGui")
+        if pg then
+            for _, desc in ipairs(pg:GetDescendants()) do
+                if desc.Name == "BagCountLabel" and desc:IsA("TextLabel") then
+                    label = desc
+                    break
+                end
+            end
+        end
+    end
+    if label and label.Text then
+        local cur, mx = label.Text:match("(%d+)%s*/%s*(%d+)")
+        if cur and mx then
+            return tonumber(cur), tonumber(mx)
+        end
+    end
+    return nil, nil
+end
+
+-- Get backpack max capacity from BagCountLabel UI
+local function getBackpackMax()
+    local _, mx = getBackpackCapacity()
+    if mx and mx > 0 then return mx end
+    return 100
 end
 
 -- Find trade confirm button (2nd accept) — Menus > Trade > Accept
@@ -941,58 +978,69 @@ local function doTradeBatch(receiverPlayer, uuids)
     fireReady(#uuids)
     print("[TRADE][SENDER] Accept/Ready done!")
 
-    -- Verify trade completion via multiple signals
+    -- Verify trade completion: backpack decrease is the only reliable signal
+    -- "Trade Completed!" popup is secondary; Trade UI closing alone is NOT reliable
     local tradeVerified = false
     if #uuids > 0 then
-        -- Check multiple signals in a combined loop: backpack decrease, Trade Completed popup, Trade UI close
-        local checkDeadline = tick() + 15
+        local tradeCompletedPopup = false
+        local checkDeadline = tick() + 20
         while tick() < checkDeadline and not tradeVerified do
-            -- Signal 1: backpack decreased
+            -- Signal 1 (primary): backpack item count decreased
             local nowCount = countItems(localPlayer)
             if nowCount < preAcceptCount then
                 print("[TRADE][SENDER] ✓ Trade verified — items:", preAcceptCount, "→", nowCount)
                 tradeVerified = true
                 break
             end
-            -- Signal 2: "Trade Completed!" popup
-            local pg = localPlayer:FindFirstChild("PlayerGui")
-            if pg then
-                for _, desc in ipairs(pg:GetDescendants()) do
-                    if desc:IsA("TextLabel") and desc.Visible and desc.Text then
-                        local txt = desc.Text:gsub("<[^>]+>", "")
-                        if txt:lower():find("trade completed") then
-                            tradeVerified = true
-                            break
+            -- Signal 2: "Trade Completed!" popup text (remember it, but keep waiting for backpack change)
+            if not tradeCompletedPopup then
+                local pg = localPlayer:FindFirstChild("PlayerGui")
+                if pg then
+                    for _, desc in ipairs(pg:GetDescendants()) do
+                        if desc:IsA("TextLabel") and desc.Visible and desc.Text then
+                            local txt = desc.Text:gsub("<[^>]+>", "")
+                            if txt:lower():find("trade completed") then
+                                tradeCompletedPopup = true
+                                print("[TRADE][SENDER] Saw 'Trade Completed!' popup — waiting for backpack to update...")
+                                break
+                            end
                         end
                     end
                 end
             end
-            if tradeVerified then
-                print("[TRADE][SENDER] ✓ Trade verified via 'Trade Completed!' popup")
-                break
-            end
-            -- Signal 3: Trade UI closed/hidden
+            -- If Trade UI closed/hidden, stop waiting (but don't mark as verified yet)
             local tradeFrame = getButtonByPath("Menus", "Trade")
-            if not tradeFrame then
-                print("[TRADE][SENDER] ✓ Trade UI gone — trade completed")
-                tradeVerified = true
-                break
-            end
-            local isOpen = true
-            if tradeFrame:IsA("ScreenGui") then
-                isOpen = tradeFrame.Enabled ~= false
-            elseif tradeFrame:IsA("GuiObject") then
-                isOpen = tradeFrame.Visible ~= false
-            end
-            if not isOpen then
-                print("[TRADE][SENDER] ✓ Trade UI hidden — trade completed")
-                tradeVerified = true
+            if not tradeFrame or (tradeFrame:IsA("GuiObject") and tradeFrame.Visible == false) or
+               (tradeFrame:IsA("ScreenGui") and tradeFrame.Enabled == false) then
+                -- Give extra time for backpack to sync after UI closes
+                if not tradeCompletedPopup then
+                    print("[TRADE][SENDER] Trade UI closed (no popup) — waiting 5s for backpack sync...")
+                    task.wait(5)
+                    local finalCount = countItems(localPlayer)
+                    if finalCount < preAcceptCount then
+                        print("[TRADE][SENDER] ✓ Trade verified (delayed) — items:", preAcceptCount, "→", finalCount)
+                        tradeVerified = true
+                    else
+                        warn("[TRADE][SENDER] Trade UI closed but items unchanged (", preAcceptCount, "→", finalCount, ") — trade likely failed")
+                    end
+                else
+                    -- Popup was seen + UI closed → give 5s for backpack
+                    task.wait(5)
+                    local finalCount = countItems(localPlayer)
+                    if finalCount < preAcceptCount then
+                        print("[TRADE][SENDER] ✓ Trade verified (popup + delayed) — items:", preAcceptCount, "→", finalCount)
+                        tradeVerified = true
+                    else
+                        warn("[TRADE][SENDER] Popup seen + UI closed but items unchanged (", preAcceptCount, "→", finalCount, ") — trade likely failed")
+                    end
+                end
                 break
             end
             task.wait(0.5)
         end
         if not tradeVerified then
-            warn("[TRADE][SENDER] No trade completion signal detected within 15s")
+            warn("[TRADE][SENDER] Trade not verified within timeout")
+            dismissTradeUI()
         end
     else
         -- Token-only: wait for Trade UI to close (more reliable than popup detection)
@@ -1162,33 +1210,52 @@ local function runSender()
                 receiverIdx = receiverIdx + 1
                 retryCount = 0
             else
-                batchSize = math.min(needForThis, remaining, 9)
-                uuids = collectUUIDs(batchSize)
-
-                if #uuids == 0 then
-                    local nowCount = countItems(localPlayer)
-                    local totalDisappeared = initialCount - nowCount
-                    local unconfirmed = totalDisappeared - confirmedSent
-                    if unconfirmed > 0 then
-                        print("[TRADE][SENDER] Items disappeared:", unconfirmed, "(start:", initialCount, "now:", nowCount, "confirmed:", confirmedSent, ")")
-                        confirmedSent = confirmedSent + unconfirmed
-                        remaining = remaining - unconfirmed
-                        if remaining <= 0 then
-                            print("[TRADE][SENDER] All items gone as expected!")
-                            break
-                        end
+                -- Check receiver's available backpack space (only if we can read capacity)
+                local bpMax = getBackpackMax()
+                local availableSpace = nil
+                if bpMax then
+                    local receiverTotal = getTotalBackpackCount(receiver)
+                    availableSpace = bpMax - receiverTotal
+                    if availableSpace <= 0 then
+                        warn("[TRADE][SENDER] Receiver", receiver.Name, "backpack is full (", receiverTotal, "/", bpMax, ") — skipping to next receiver")
+                        receiverIdx = receiverIdx + 1
+                        retryCount = 0
                     end
-                    local nameList = getNameList()
-                    local msg = "No items matching config: " .. table.concat(nameList, ", ") .. " (sent " .. confirmedSent .. " so far)"
-                    warn("[TRADE][SENDER]", msg)
-                    callDone()
-                    task.wait(15)
-                    localPlayer:Kick(msg)
-                    return
                 end
-                if #uuids < batchSize then
-                    warn("[TRADE][SENDER] Found only", #uuids, "item(s) (need", batchSize, ") — trading what's available")
-                    batchSize = #uuids
+
+                if availableSpace == nil or availableSpace > 0 then
+                    batchSize = math.min(needForThis, remaining, 9)
+                    if availableSpace and availableSpace < 9 then
+                        batchSize = math.min(batchSize, availableSpace)
+                        print("[TRADE][SENDER] Receiver backpack:", getTotalBackpackCount(receiver), "/", bpMax, "→ batch capped to", batchSize)
+                    end
+                    uuids = collectUUIDs(batchSize)
+
+                    if #uuids == 0 then
+                        local nowCount = countItems(localPlayer)
+                        local totalDisappeared = initialCount - nowCount
+                        local unconfirmed = totalDisappeared - confirmedSent
+                        if unconfirmed > 0 then
+                            print("[TRADE][SENDER] Items disappeared:", unconfirmed, "(start:", initialCount, "now:", nowCount, "confirmed:", confirmedSent, ")")
+                            confirmedSent = confirmedSent + unconfirmed
+                            remaining = remaining - unconfirmed
+                            if remaining <= 0 then
+                                print("[TRADE][SENDER] All items gone as expected!")
+                                break
+                            end
+                        end
+                        local nameList = getNameList()
+                        local msg = "No items matching config: " .. table.concat(nameList, ", ") .. " (sent " .. confirmedSent .. " so far)"
+                        warn("[TRADE][SENDER]", msg)
+                        callDone()
+                        task.wait(15)
+                        localPlayer:Kick(msg)
+                        return
+                    end
+                    if #uuids < batchSize then
+                        warn("[TRADE][SENDER] Found only", #uuids, "item(s) (need", batchSize, ") — trading what's available")
+                        batchSize = #uuids
+                    end
                 end
             end
         end
@@ -1228,40 +1295,12 @@ local function runSender()
                         print("[TRADE][SENDER] Remaining:", remaining, "— waiting 3s...")
                         task.wait(3)
                     end
-                elseif success then
-                    -- doTradeBatch said success (Trade Completed detected) but backpack count unchanged yet
-                    -- Give extra time for backpack to update
-                    print("[TRADE][SENDER] Trade reported success but backpack unchanged — waiting 5s for sync...")
-                    task.wait(5)
-                    afterCount = countItems(localPlayer)
-                    actualSent = beforeCount - afterCount
-                    if actualSent > 0 then
-                        confirmedSent = confirmedSent + actualSent
-                        remaining = remaining - actualSent
-                        sentPerReceiver[receiverIdx] = (sentPerReceiver[receiverIdx] or 0) + actualSent
-                        print("[TRADE][SENDER] ✓ Delayed verify: sent", actualSent)
-                        if (sentPerReceiver[receiverIdx] or 0) >= itemsPerReceiver then
-                            receiverIdx = receiverIdx + 1
-                        end
-                        retryCount = 0
-                    else
-                        -- Trust the Trade Completed signal
-                        local trustSent = #uuids
-                        confirmedSent = confirmedSent + trustSent
-                        remaining = remaining - trustSent
-                        sentPerReceiver[receiverIdx] = (sentPerReceiver[receiverIdx] or 0) + trustSent
-                        print("[TRADE][SENDER] ✓ Trusting Trade Completed signal — counted", trustSent, "item(s)")
-                        if (sentPerReceiver[receiverIdx] or 0) >= itemsPerReceiver then
-                            receiverIdx = receiverIdx + 1
-                        end
-                        retryCount = 0
-                    end
-                    if remaining > 0 then
-                        task.wait(3)
-                    end
                 else
+                    -- Items didn't decrease = trade failed, regardless of doTradeBatch result
                     retryCount = retryCount + 1
-                    warn("[TRADE][SENDER] No items sent (attempt", retryCount, "/", MAX_RETRIES, ")")
+                    warn("[TRADE][SENDER] Backpack unchanged (", beforeCount, "→", afterCount, ") — trade failed (attempt", retryCount, "/", MAX_RETRIES, ")")
+                    -- Dismiss any leftover trade UI
+                    dismissTradeUI()
                     if retryCount >= MAX_RETRIES then
                         -- Check total backpack vs initial for untracked sends
                         local nowTotal = countItems(localPlayer)
@@ -1405,9 +1444,23 @@ local function runReceiver()
           "items | rounds:", totalRounds or "unlimited")
 
     local round = 0
+    local backpackFull = false
     while true do
         round = round + 1
         if totalRounds and round > totalRounds then break end
+
+        -- Check backpack capacity before accepting trade
+        local curCap, maxCap = getBackpackCapacity()
+        if curCap and maxCap then
+            local space = maxCap - curCap
+            if space <= 0 then
+                print("[TRADE][RECEIVER] Backpack is full (", curCap, "/", maxCap, ") — stopping")
+                backpackFull = true
+                break
+            end
+            print("[TRADE][RECEIVER] Backpack:", curCap, "/", maxCap, "| available:", space)
+        end
+
         -- Calculate expected batch size for this round
         local expectedBatch
         if totalNeeded > 0 then
@@ -1475,8 +1528,17 @@ local function runReceiver()
             dismissTradeUI()
             task.wait(1)
             consecutiveFail = consecutiveFail + 1
-            if consecutiveFail >= 3 then
-                warn("[TRADE][RECEIVER] 3 consecutive empty trades — stopping")
+            -- Don't stop if senders are still online
+            local anyOnline = false
+            for _, sName in ipairs(CFG_SENDERS) do
+                if Players:FindFirstChild(sName) then anyOnline = true; break end
+            end
+            if not anyOnline then
+                warn("[TRADE][RECEIVER] Empty trades + all senders gone — stopping")
+                break
+            end
+            if consecutiveFail >= 15 then
+                warn("[TRADE][RECEIVER]", consecutiveFail, "consecutive empty trades — stopping")
                 break
             end
             skipRound = true
@@ -1540,13 +1602,19 @@ local function runReceiver()
                 consecutiveFail = 0
             else
             consecutiveFail = consecutiveFail + 1
-            warn("[TRADE][RECEIVER] Round", round, "no items gained — trade likely failed (fail", consecutiveFail, "/ 3 )")
-            if consecutiveFail >= 3 then
-                if totalNeeded == 0 then
-                    print("[TRADE][RECEIVER] send-all: 3 consecutive fails — sender likely done")
-                else
-                    warn("[TRADE][RECEIVER] 3 consecutive fails — stopping")
-                end
+            warn("[TRADE][RECEIVER] Round", round, "no items gained — trade likely failed (fail", consecutiveFail, ")")
+            -- Only stop if senders are ALL gone from server
+            local anyOnline = false
+            for _, sName in ipairs(CFG_SENDERS) do
+                if Players:FindFirstChild(sName) then anyOnline = true; break end
+            end
+            if not anyOnline then
+                warn("[TRADE][RECEIVER] All senders left the server — stopping")
+                break
+            end
+            -- Safety: if way too many fails, still stop
+            if consecutiveFail >= 15 then
+                warn("[TRADE][RECEIVER]", consecutiveFail, "consecutive fails — stopping")
                 break
             end
             end -- else (not tokenOnlyMode)
@@ -1557,6 +1625,15 @@ local function runReceiver()
                 break
             end
         end
+
+        -- Check if backpack is now full after this round
+        local curCap2, maxCap2 = getBackpackCapacity()
+        if curCap2 and maxCap2 and curCap2 >= maxCap2 then
+            print("[TRADE][RECEIVER] Backpack is full after this round (", curCap2, "/", maxCap2, ") — stopping")
+            backpackFull = true
+            break
+        end
+
         end -- if not skipRound
     end
 
@@ -1594,6 +1671,12 @@ local function runReceiver()
         print("[TRADE][RECEIVER] ✓ Partial success: got", actualItems, "item(s) + tokens", CFG_TOKEN_AMOUNT)
     end
 
+    -- Backpack full: treat as success if we received any items
+    if backpackFull and actualItems > 0 then
+        itemsOk = true
+        print("[TRADE][RECEIVER] ✓ Backpack full — received", actualItems, "item(s) before full")
+    end
+
     local isSuccess = itemsOk or tokenOk or partialOk
     print("[TRADE][RECEIVER] ===", isSuccess and "SUCCESS" or "FAILED", "===")
 
@@ -1604,6 +1687,7 @@ local function runReceiver()
             tokens        = tokenOnlyMode and CFG_TOKEN_AMOUNT or 0,
             tokenOnly     = tokenOnlyMode,
             success       = isSuccess,
+            backpackFull  = backpackFull,
         }
         print("[TRADE][CALLBACK] Sending result:", "items="..result.items,
               "expected="..result.itemsExpected, "tokens="..result.tokens,
@@ -1625,10 +1709,25 @@ local function runReceiver()
         end
         if shouldKick then
             task.wait(8) -- wait for callback to finish
-            local msg = "Done traded received " .. (tokenOnlyMode and "tokens" or (actualItems .. " items"))
+            local msg
+            if backpackFull then
+                msg = "Backpack is full — received " .. actualItems .. " items"
+            else
+                msg = "Done traded received " .. (tokenOnlyMode and "tokens" or (actualItems .. " items"))
+            end
             print("[TRADE][RECEIVER]", msg)
             localPlayer:Kick(msg)
         end
+    end
+
+    -- Backpack full but KickAfterDone not set or not isSuccess → still done+kick if backpack full
+    if backpackFull and not (CFG_KICK_AFTER_DONE and isSuccess) then
+        print("[TRADE][RECEIVER] Backpack is full — calling done + kick")
+        callDone()
+        task.wait(8)
+        local msg = "Backpack is full — received " .. actualItems .. " items"
+        print("[TRADE][RECEIVER]", msg)
+        localPlayer:Kick(msg)
     end
 end
 
