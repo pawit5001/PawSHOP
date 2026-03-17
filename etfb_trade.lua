@@ -371,6 +371,8 @@ end
 -- Wait for all Receivers to join (timeout)
 local function waitForReceivers(timeoutSec)
     local deadline = tick() + timeoutSec
+    local stableCount = 0
+    local lastFoundCount = 0
     while tick() < deadline do
         -- Re-resolve auto-fill if receivers were auto-filled (new players may have joined)
         if RECEIVERS_AUTO_FILLED then
@@ -388,7 +390,25 @@ local function waitForReceivers(timeoutSec)
             end
         end
         local found = getReceiverPlayers()
-        if #found > 0 and #found == #CFG_RECEIVERS then return found end
+        if #found > 0 and #found == #CFG_RECEIVERS then
+            -- For auto-fill: wait a few seconds for more players to join before returning
+            if RECEIVERS_AUTO_FILLED then
+                if #found == lastFoundCount then
+                    stableCount = stableCount + 1
+                else
+                    stableCount = 0
+                    lastFoundCount = #found
+                end
+                if stableCount >= 5 then -- stable for 5s
+                    return found
+                end
+            else
+                return found
+            end
+        else
+            stableCount = 0
+            lastFoundCount = #found
+        end
         task.wait(1)
     end
     -- Return whatever was found
@@ -1179,8 +1199,39 @@ local function runSender()
     while remaining > 0 do
         -- Cycle through receivers
         if receiverIdx > #receivers then
-            print("[TRADE][SENDER] All receivers done")
-            break
+            -- Re-check for new players if receivers were auto-filled
+            if RECEIVERS_AUTO_FILLED then
+                local exclude = {}
+                for _, name in ipairs(CFG_SENDERS) do exclude[name] = true end
+                -- Also exclude receivers already traded with
+                local existingNames = {}
+                for _, r in ipairs(receivers) do existingNames[r.Name] = true end
+                local newReceivers = {}
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if not exclude[p.Name] and not existingNames[p.Name] then
+                        table.insert(newReceivers, p)
+                        table.insert(CFG_RECEIVERS, p.Name)
+                    end
+                end
+                if #newReceivers > 0 then
+                    for _, r in ipairs(newReceivers) do
+                        table.insert(receivers, r)
+                    end
+                    local addedItems = itemsPerReceiver * #newReceivers
+                    remaining = remaining + addedItems
+                    totalToSend = totalToSend + addedItems
+                    print("[TRADE][SENDER] Found", #newReceivers, "new receiver(s) →", table.concat(
+                        (function() local n={}; for _,r in ipairs(newReceivers) do table.insert(n,r.Name) end; return n end)(), ", "),
+                        "| remaining:", remaining)
+                    -- Don't break, continue the loop
+                else
+                    print("[TRADE][SENDER] All receivers done (no new players)")
+                    break
+                end
+            else
+                print("[TRADE][SENDER] All receivers done")
+                break
+            end
         end
 
         local receiver  = receivers[receiverIdx]
