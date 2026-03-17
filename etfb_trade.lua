@@ -425,6 +425,26 @@ local function getSenderPlayers()
     return list
 end
 
+-- Wait for a receiver's game to be loaded (character spawned) before trading
+local function waitForReceiverReady(receiver, maxWait)
+    maxWait = maxWait or 45
+    local deadline = tick() + maxWait
+    while tick() < deadline do
+        if not Players:FindFirstChild(receiver.Name) then
+            return false -- left server
+        end
+        local char = receiver.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            -- Character loaded, give extra time for scripts to initialize
+            task.wait(5)
+            return true
+        end
+        task.wait(1)
+    end
+    -- Timed out but player still here, try anyway
+    return Players:FindFirstChild(receiver.Name) ~= nil
+end
+
 -- Wait for at least 1 Sender to join (timeout)
 local function waitForAnySender(timeoutSec)
     local deadline = tick() + timeoutSec
@@ -1192,12 +1212,13 @@ local function runSender()
     local confirmedSent = 0
     local confirmedTokenSent = 0
     local batchCap = 9 -- dynamic cap, reduces after consecutive fails
+    local receiverReady = {} -- track which receivers have been confirmed ready
     if not tokenOnly then
         print("[TRADE][SENDER] Initial matching items in backpack:", initialCount)
     end
 
-    while remaining > 0 do
-        -- Cycle through receivers
+    while true do
+        -- Check if current receiver index exceeds known receivers
         if receiverIdx > #receivers then
             -- Re-check for new players if receivers were auto-filled
             if RECEIVERS_AUTO_FILLED then
@@ -1233,6 +1254,9 @@ local function runSender()
                 break
             end
         end
+
+        -- No more items to send
+        if remaining <= 0 then break end
 
         local receiver  = receivers[receiverIdx]
 
@@ -1316,6 +1340,23 @@ local function runSender()
 
         -- Trade if batchSize > 0 or tokenOnly, otherwise skip
         if batchSize > 0 or tokenOnly then
+            -- Wait for receiver's game to load before first trade
+            if not receiverReady[receiver.Name] then
+                print("[TRADE][SENDER] Waiting for", receiver.Name, "to load game...")
+                local ready = waitForReceiverReady(receiver, 45)
+                if not ready then
+                    warn("[TRADE][SENDER]", receiver.Name, "left server while waiting to load")
+                    receiverIdx = receiverIdx + 1
+                    retryCount = 0
+                    batchCap = 9
+                else
+                    receiverReady[receiver.Name] = true
+                end
+            end
+
+            if not receiverReady[receiver.Name] then
+                -- receiver left, skip to next iteration
+            else
             local beforeCount = countItems(localPlayer)
 
             local success, batchTokenSent, tradeStatus = doTradeBatch(receiver, uuids)
@@ -1388,6 +1429,7 @@ local function runSender()
                     end
                 end
             end
+            end -- receiverReady else block
         end
     end
 
@@ -1806,7 +1848,9 @@ local function runReceiver()
             shouldKick = not (#CFG_SENDERS > 1 and #CFG_RECEIVERS == 1)
         end
         if shouldKick then
-            task.wait(8) -- wait for callback to finish
+            print("[TRADE][RECEIVER] Calling done...")
+            callDone()
+            task.wait(5) -- extra time for callback to finish
             local msg
             if backpackFull then
                 msg = "Backpack is full — received " .. actualItems .. " items"
@@ -1822,7 +1866,7 @@ local function runReceiver()
     if backpackFull and not (CFG_KICK_AFTER_DONE and isSuccess) then
         print("[TRADE][RECEIVER] Backpack is full — calling done + kick")
         callDone()
-        task.wait(8)
+        task.wait(5)
         local msg = "Backpack is full — received " .. actualItems .. " items"
         print("[TRADE][RECEIVER]", msg)
         localPlayer:Kick(msg)
