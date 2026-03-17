@@ -371,6 +371,15 @@ local function waitForReceivers(timeoutSec)
     local deadline = tick() + timeoutSec
     local stableCount = 0
     local lastFoundCount = 0
+    -- Adjust stable-wait based on current server size:
+    -- many players = likely everyone is here, short wait
+    -- few/no players = wait longer for joins
+    local function getStableTarget()
+        local total = #Players:GetPlayers()
+        if total >= 6 then return 2 end  -- big server, 2s stable
+        if total >= 3 then return 3 end  -- medium, 3s
+        return 5                          -- small/empty, 5s
+    end
     while tick() < deadline do
         -- Re-resolve auto-fill if receivers were auto-filled (new players may have joined)
         if RECEIVERS_AUTO_FILLED then
@@ -389,7 +398,7 @@ local function waitForReceivers(timeoutSec)
         end
         local found = getReceiverPlayers()
         if #found > 0 and #found == #CFG_RECEIVERS then
-            -- For auto-fill: wait a few seconds for more players to join before returning
+            -- For auto-fill: wait for player count to stabilize before returning
             if RECEIVERS_AUTO_FILLED then
                 if #found == lastFoundCount then
                     stableCount = stableCount + 1
@@ -397,7 +406,9 @@ local function waitForReceivers(timeoutSec)
                     stableCount = 0
                     lastFoundCount = #found
                 end
-                if stableCount >= 5 then -- stable for 5s
+                local stableTarget = getStableTarget()
+                if stableCount >= stableTarget then
+                    print("[TRADE] Receivers stable for", stableTarget, "s (server:", #Players:GetPlayers(), "players)")
                     return found
                 end
             else
@@ -425,7 +436,7 @@ end
 
 -- Wait for a receiver's game to be loaded (character spawned) before trading
 local function waitForReceiverReady(receiver, maxWait)
-    maxWait = maxWait or 45
+    maxWait = maxWait or 30
     local deadline = tick() + maxWait
     while tick() < deadline do
         if not Players:FindFirstChild(receiver.Name) then
@@ -433,8 +444,8 @@ local function waitForReceiverReady(receiver, maxWait)
         end
         local char = receiver.Character
         if char and char:FindFirstChild("HumanoidRootPart") then
-            -- Character loaded, give extra time for scripts to initialize
-            task.wait(5)
+            -- Character loaded, short wait for scripts to initialize
+            task.wait(2)
             return true
         end
         task.wait(1)
@@ -947,12 +958,14 @@ local function doTradeBatch(receiverPlayer, uuids)
             end)
         end)
     end
-    task.wait(1)  -- wait for server to process
-    print("[TRADE][SENDER] Placed", #uuids, "item(s) in trade slots")
-
-    -- Verify items in Trade UI
-    task.wait(0.5)
-    local giveItems = readTradeSlots("GiveOffer")
+    -- Poll until items appear in Trade UI (max 3s)
+    local giveItems = {}
+    local placeDeadline = tick() + 3
+    while tick() < placeDeadline do
+        task.wait(0.3)
+        giveItems = readTradeSlots("GiveOffer")
+        if #giveItems > 0 then break end
+    end
     if #giveItems > 0 then
         print("[TRADE][SENDER] ✓ Trade UI confirmed:", #giveItems, "item(s) →", table.concat(giveItems, ", "))
     else
@@ -1009,8 +1022,7 @@ local function doTradeBatch(receiverPlayer, uuids)
     print("[TRADE][SENDER] Trade UI confirmed:", #finalUiItems, "item(s),", finalUiTokens, "token(s) — proceeding")
 
     -- Wait before Accept ("Trade was modified" cooldown)
-    print("[TRADE][SENDER] Waiting 2s before clicking Accept...")
-    task.wait(2)
+    task.wait(1.5)
 
     local preAcceptCount = countItems(localPlayer)
 
@@ -1052,27 +1064,22 @@ local function doTradeBatch(receiverPlayer, uuids)
             local tradeFrame = getButtonByPath("Menus", "Trade")
             if not tradeFrame or (tradeFrame:IsA("GuiObject") and tradeFrame.Visible == false) or
                (tradeFrame:IsA("ScreenGui") and tradeFrame.Enabled == false) then
-                -- Give extra time for backpack to sync after UI closes
-                if not tradeCompletedPopup then
-                    print("[TRADE][SENDER] Trade UI closed (no popup) — waiting 5s for backpack sync...")
-                    task.wait(5)
+                -- Poll backpack until items decrease (max 5s)
+                local syncLabel = tradeCompletedPopup and "popup + " or ""
+                print("[TRADE][SENDER] Trade UI closed (", syncLabel, "polling backpack sync...)")
+                local syncDeadline = tick() + 5
+                while tick() < syncDeadline do
                     local finalCount = countItems(localPlayer)
                     if finalCount < preAcceptCount then
-                        print("[TRADE][SENDER] ✓ Trade verified (delayed) — items:", preAcceptCount, "→", finalCount)
+                        print("[TRADE][SENDER] ✓ Trade verified (", syncLabel, "sync) — items:", preAcceptCount, "→", finalCount)
                         tradeVerified = true
-                    else
-                        warn("[TRADE][SENDER] Trade UI closed but items unchanged (", preAcceptCount, "→", finalCount, ") — trade likely failed")
+                        break
                     end
-                else
-                    -- Popup was seen + UI closed → give 5s for backpack
-                    task.wait(5)
+                    task.wait(0.5)
+                end
+                if not tradeVerified then
                     local finalCount = countItems(localPlayer)
-                    if finalCount < preAcceptCount then
-                        print("[TRADE][SENDER] ✓ Trade verified (popup + delayed) — items:", preAcceptCount, "→", finalCount)
-                        tradeVerified = true
-                    else
-                        warn("[TRADE][SENDER] Popup seen + UI closed but items unchanged (", preAcceptCount, "→", finalCount, ") — trade likely failed")
-                    end
+                    warn("[TRADE][SENDER] Backpack unchanged after 5s (", preAcceptCount, "→", finalCount, ") — trade likely failed")
                 end
                 break
             end
@@ -1112,7 +1119,7 @@ local function doTradeBatch(receiverPlayer, uuids)
             dismissTradeUI()
         end
     end
-    task.wait(2)
+    task.wait(1)
     return tradeVerified, tokenAmountOffered, "ok"
 end
 
@@ -1144,7 +1151,7 @@ local function runSender()
             local msg = "Token balance is 0 — nothing to send"
             warn("[TRADE][SENDER]", msg)
             callDone()
-            task.wait(15)
+            task.wait(3)
             localPlayer:Kick(msg)
             return
         else
@@ -1152,7 +1159,7 @@ local function runSender()
             local msg = "No items matching config: " .. table.concat(nameList, ", ")
             warn("[TRADE][SENDER]", msg)
             callDone()
-            task.wait(15)
+            task.wait(3)
             localPlayer:Kick(msg)
             return
         end
@@ -1167,7 +1174,7 @@ local function runSender()
         local msg = "No items matching config: " .. table.concat(nameList, ", ")
         warn("[TRADE][SENDER]", msg)
         callDone()
-        task.wait(15)
+        task.wait(3)
         localPlayer:Kick(msg)
         return
     end
@@ -1181,13 +1188,17 @@ local function runSender()
     end
 
     -- Wait for all Receivers to join (max 120s)
-    local receivers = waitForReceivers(120)
+    -- Adjust initial wait based on server size
+    local serverSize = #Players:GetPlayers()
+    local recvTimeout = serverSize >= 3 and 60 or 120
+    print("[TRADE][SENDER] Server has", serverSize, "player(s) — receiver timeout:", recvTimeout, "s")
+    local receivers = waitForReceivers(recvTimeout)
     if #receivers == 0 then
         local msg = "No Receiver found in server (waited 120s)"
         warn("[TRADE][SENDER]", msg)
         if CFG_KICK_AFTER_DONE then
             callDone()
-            task.wait(15)
+            task.wait(3)
             localPlayer:Kick(msg)
         end
         return
@@ -1324,7 +1335,7 @@ local function runSender()
                         local msg = "No items matching config: " .. table.concat(nameList, ", ") .. " (sent " .. confirmedSent .. " so far)"
                         warn("[TRADE][SENDER]", msg)
                         callDone()
-                        task.wait(15)
+                        task.wait(3)
                         localPlayer:Kick(msg)
                         return
                     end
@@ -1341,7 +1352,7 @@ local function runSender()
             -- Wait for receiver's game to load before first trade
             if not receiverReady[receiver.Name] then
                 print("[TRADE][SENDER] Waiting for", receiver.Name, "to load game...")
-                local ready = waitForReceiverReady(receiver, 45)
+                local ready = waitForReceiverReady(receiver, 30)
                 if not ready then
                     warn("[TRADE][SENDER]", receiver.Name, "left server while waiting to load")
                     receiverIdx = receiverIdx + 1
@@ -1359,7 +1370,7 @@ local function runSender()
 
             local success, batchTokenSent, tradeStatus = doTradeBatch(receiver, uuids)
 
-            task.wait(2)
+            task.wait(1)
 
             -- Receiver didn't accept trade request → skip to next receiver
             if tradeStatus == "rejected" then
@@ -1392,8 +1403,8 @@ local function runSender()
                     end
                     retryCount = 0
                     if remaining > 0 then
-                        print("[TRADE][SENDER] Remaining:", remaining, "— waiting 3s...")
-                        task.wait(3)
+                        print("[TRADE][SENDER] Remaining:", remaining)
+                        task.wait(1.5)
                     end
                 else
                     -- Items didn't decrease = trade failed, regardless of doTradeBatch result
@@ -1423,7 +1434,7 @@ local function runSender()
                             batchCap = 9  -- reset for next receiver
                         end
                     else
-                        task.wait(3)
+                        task.wait(1.5)
                     end
                 end
             end
@@ -1464,7 +1475,7 @@ local function runSender()
         if shouldKick then
             print("[TRADE][SENDER] Calling done...")
             callDone()
-            task.wait(15)
+            task.wait(3)
             local msg = "Done traded sent " .. (tokenOnly and (confirmedTokenSent .. " tokens") or (confirmedSent .. " items"))
             print("[TRADE][SENDER]", msg)
             localPlayer:Kick(msg)
@@ -1744,7 +1755,7 @@ local function runReceiver()
                 dismissTradeUI()
             end
         end
-        task.wait(2)
+        task.wait(1)
 
         -- Check if items were actually received
         local afterCount = countItems(localPlayer)
@@ -1853,9 +1864,11 @@ local function runReceiver()
     end
 
     -- Done + Kick
+    -- Only done+kick when ItemsAmount > 0 (known target).
+    -- ItemsAmount = 0 (send-all) → skip done+kick (receiver doesn't know when done).
     -- Auto-filled side = alts → kick. Explicitly set side = main → stay.
     -- If neither auto-filled: receiver kicks unless many→1.
-    if CFG_KICK_AFTER_DONE and isSuccess then
+    if CFG_KICK_AFTER_DONE and isSuccess and CFG_ITEMS_AMOUNT_RAW > 0 then
         local shouldKick
         if RECEIVERS_AUTO_FILLED then
             shouldKick = true  -- receiver is alt (auto-filled) → kick
