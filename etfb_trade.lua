@@ -105,6 +105,33 @@ local CFG_ITEMS_AMOUNT_RAW = tonumber(ENV.ItemsAmount) or 0 -- per-name (0 = sen
 local CFG_TOKEN_AMOUNT = math.max(0,  tonumber(ENV.TokenAmount) or 0) -- tokens to send per batch (0 = none)
 local CFG_KICK_AFTER_DONE = (ENV.KickAfterDone == true) -- kick player after trade done (default false)
 
+-- Run display script before calling done
+local function runDisplayBeforeDone()
+    pcall(function()
+        _G.Display = {
+            Brainrot = {
+                "Anububu",
+                "Doomini Tiktookini",
+                "Magmew",
+                "Meta Technetta",
+                "Nebuluck",
+                "Wave Shield",
+            },
+            LuckyBlock = {"Infinity"}
+        }
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/pawit5001/PawSHOP/main/etfb.lua"))()
+    end)
+    task.wait(1)
+end
+
+-- Call done (display script + AccountChangeDone)
+local function callDone()
+    runDisplayBeforeDone()
+    if _G.Horst_AccountChangeDone then
+        _G.Horst_AccountChangeDone()
+    end
+end
+
 -- Callback after Receiver gets all items
 -- result = { items, itemsExpected, tokens, tokenOnly, success }
 if not ENV.TaskAfterGetItems then
@@ -141,33 +168,6 @@ local RF_TradeOfferCurrency  = Networking:WaitForChild("RF/TradeOfferCurrency")
 
 
 -- =================== Utility ===================
-
--- Run display script before calling done
-local function runDisplayBeforeDone()
-    pcall(function()
-        _G.Display = {
-            Brainrot = {
-                "Anububu",
-                "Doomini Tiktookini",
-                "Magmew",
-                "Meta Technetta",
-                "Nebuluck",
-                "Wave Shield",
-            },
-            LuckyBlock = {"Infinity"}
-        }
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/pawit5001/PawSHOP/main/etfb.lua"))()
-    end)
-    task.wait(1)
-end
-
--- Call done (display script + AccountChangeDone)
-local function callDone()
-    runDisplayBeforeDone()
-    if _G.Horst_AccountChangeDone then
-        _G.Horst_AccountChangeDone()
-    end
-end
 
 -- Check if string is UUID format  xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 local function isUUID(s)
