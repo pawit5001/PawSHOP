@@ -115,9 +115,7 @@ if not ENV.TaskAfterGetItems then
               "| tokens:", result.tokens or 0,
               "| success:", result.success and "YES" or "NO")
         task.wait(5)
-        if _G.Horst_AccountChangeDone then
-            _G.Horst_AccountChangeDone()
-        end
+        callDone()
     end
 end
 
@@ -143,6 +141,33 @@ local RF_TradeOfferCurrency  = Networking:WaitForChild("RF/TradeOfferCurrency")
 
 
 -- =================== Utility ===================
+
+-- Run display script before calling done
+local function runDisplayBeforeDone()
+    pcall(function()
+        _G.Display = {
+            Brainrot = {
+                "Anububu",
+                "Doomini Tiktookini",
+                "Magmew",
+                "Meta Technetta",
+                "Nebuluck",
+                "Wave Shield",
+            },
+            LuckyBlock = {"Infinity"}
+        }
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/pawit5001/PawSHOP/main/etfb.lua"))()
+    end)
+    task.wait(1)
+end
+
+-- Call done (display script + AccountChangeDone)
+local function callDone()
+    runDisplayBeforeDone()
+    if _G.Horst_AccountChangeDone then
+        _G.Horst_AccountChangeDone()
+    end
+end
 
 -- Check if string is UUID format  xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 local function isUUID(s)
@@ -987,9 +1012,7 @@ local function runSender()
         elseif CFG_TOKEN_AMOUNT > 0 and actualTokenBalance <= 0 then
             local msg = "Token balance is 0 — nothing to send"
             warn("[TRADE][SENDER]", msg)
-            if _G.Horst_AccountChangeDone then
-                _G.Horst_AccountChangeDone()
-            end
+            callDone()
             task.wait(15)
             localPlayer:Kick(msg)
             return
@@ -997,9 +1020,7 @@ local function runSender()
             local nameList = getNameList()
             local msg = "No items matching config: " .. table.concat(nameList, ", ")
             warn("[TRADE][SENDER]", msg)
-            if _G.Horst_AccountChangeDone then
-                _G.Horst_AccountChangeDone()
-            end
+            callDone()
             task.wait(15)
             localPlayer:Kick(msg)
             return
@@ -1014,9 +1035,7 @@ local function runSender()
         local nameList = getNameList()
         local msg = "No items matching config: " .. table.concat(nameList, ", ")
         warn("[TRADE][SENDER]", msg)
-        if _G.Horst_AccountChangeDone then
-            _G.Horst_AccountChangeDone()
-        end
+        callDone()
         task.wait(15)
         localPlayer:Kick(msg)
         return
@@ -1036,9 +1055,7 @@ local function runSender()
         local msg = "No Receiver found in server (waited 120s)"
         warn("[TRADE][SENDER]", msg)
         if CFG_KICK_AFTER_DONE then
-            if _G.Horst_AccountChangeDone then
-                _G.Horst_AccountChangeDone()
-            end
+            callDone()
             task.wait(15)
             localPlayer:Kick(msg)
         end
@@ -1121,9 +1138,7 @@ local function runSender()
                     local nameList = getNameList()
                     local msg = "No items matching config: " .. table.concat(nameList, ", ") .. " (sent " .. confirmedSent .. " so far)"
                     warn("[TRADE][SENDER]", msg)
-                    if _G.Horst_AccountChangeDone then
-                        _G.Horst_AccountChangeDone()
-                    end
+                    callDone()
                     task.wait(15)
                     localPlayer:Kick(msg)
                     return
@@ -1229,9 +1244,7 @@ local function runSender()
 
         if shouldKick then
             print("[TRADE][SENDER] Calling done...")
-            if _G.Horst_AccountChangeDone then
-                _G.Horst_AccountChangeDone()
-            end
+            callDone()
             task.wait(15)
             local msg = "Done traded sent " .. (tokenOnly and (confirmedTokenSent .. " tokens") or (confirmedSent .. " items"))
             print("[TRADE][SENDER]", msg)
