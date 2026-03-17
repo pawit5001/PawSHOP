@@ -896,7 +896,9 @@ local function doTradeBatch(receiverPlayer, uuids)
         task.wait(0.5)
     end
     if not tradeOpened then
-        warn("[TRADE][SENDER] Trade UI didn't open within 15s — placing items anyway")
+        warn("[TRADE][SENDER] Trade UI didn't open within 15s — receiver likely didn't accept")
+        dismissTradeUI()
+        return false, 0, "rejected"
     end
 
     -- Place items in slots 1-9 in parallel
@@ -1073,7 +1075,7 @@ local function doTradeBatch(receiverPlayer, uuids)
         end
     end
     task.wait(2)
-    return tradeVerified, tokenAmountOffered
+    return tradeVerified, tokenAmountOffered, "ok"
 end
 
 local function runSender()
@@ -1265,11 +1267,17 @@ local function runSender()
         if batchSize > 0 or tokenOnly then
             local beforeCount = countItems(localPlayer)
 
-            local success, batchTokenSent = doTradeBatch(receiver, uuids)
+            local success, batchTokenSent, tradeStatus = doTradeBatch(receiver, uuids)
 
             task.wait(2)
 
-            if tokenOnly then
+            -- Receiver didn't accept trade request → skip to next receiver
+            if tradeStatus == "rejected" then
+                warn("[TRADE][SENDER] Receiver", receiver.Name, "didn't accept trade — skipping")
+                receiverIdx = receiverIdx + 1
+                retryCount = 0
+                batchCap = 9
+            elseif tokenOnly then
                 confirmedTokenSent = confirmedTokenSent + (batchTokenSent or 0)
                 print("[TRADE][SENDER] Token-only trade sent to", receiver.Name, "(", batchTokenSent or 0, "tokens)")
                 remaining = remaining - 1
@@ -1372,8 +1380,9 @@ local function runSender()
         end
     end
 
-    -- If trade failed and KickAfterDone → kick only (no done callback)
+    -- If trade failed and KickAfterDone → done + kick (receiver backpack full is still a valid completion)
     if CFG_KICK_AFTER_DONE and not tradeOk then
+        callDone()
         local msg = "Trade incomplete — sent " .. confirmedSent .. " / " .. totalToSend
         warn("[TRADE][SENDER]", msg)
         task.wait(5)
