@@ -455,9 +455,9 @@ local function waitForReceiverReady(receiver, maxWait)
 end
 
 -- Wait for at least 1 Sender to join (timeout)
-local function waitForAnySender(timeoutSec)
-    local deadline = tick() + timeoutSec
-    while tick() < deadline do
+local function waitForAnySender()
+    print("[TRADE] Waiting for sender(s) to join (no timeout)...")
+    while true do
         -- Re-resolve auto-fill if senders were auto-filled (new players may have joined)
         if SENDERS_AUTO_FILLED then
             local exclude = {}
@@ -477,7 +477,6 @@ local function waitForAnySender(timeoutSec)
         if #found > 0 then return found end
         task.wait(1)
     end
-    return {}
 end
 
 
@@ -683,30 +682,33 @@ local function clickAcceptTradeRequest(timeoutSec, hasPeers)
             return false
         end
 
-        -- Timeout logic: if hasPeers → wait forever while peers exist
-        if hasPeers then
-            if hasPeers() then
-                nopeersDeadline = nil -- reset timer, peers still here
+        -- Timeout logic: if timeoutSec is nil → wait forever
+        if timeoutSec then
+            if hasPeers then
+                if hasPeers() then
+                    nopeersDeadline = nil -- reset timer, peers still here
+                else
+                    if not nopeersDeadline then
+                        nopeersDeadline = tick() + timeoutSec
+                        print("[TRADE] No peers in server — starting", timeoutSec, "s timeout")
+                    end
+                    if tick() >= nopeersDeadline then
+                        warn("[TRADE] Trade request popup never appeared (no peers + timeout", timeoutSec, "s)")
+                        return false
+                    end
+                end
             else
+                -- No hasPeers function → simple fixed timeout
                 if not nopeersDeadline then
                     nopeersDeadline = tick() + timeoutSec
-                    print("[TRADE] No peers in server — starting", timeoutSec, "s timeout")
                 end
                 if tick() >= nopeersDeadline then
-                    warn("[TRADE] Trade request popup never appeared (no peers + timeout", timeoutSec, "s)")
+                    warn("[TRADE] Trade request popup never appeared (timeout", timeoutSec, "s)")
                     return false
                 end
             end
-        else
-            -- No hasPeers function → simple fixed timeout
-            if not nopeersDeadline then
-                nopeersDeadline = tick() + timeoutSec
-            end
-            if tick() >= nopeersDeadline then
-                warn("[TRADE] Trade request popup never appeared (timeout", timeoutSec, "s)")
-                return false
-            end
         end
+        -- timeoutSec == nil → wait forever (no timeout)
 
         if not printed then
             print("[TRADE] Waiting for trade request popup...", hasPeers and "(unlimited while peers online)" or ("(timeout: " .. timeoutSec .. "s)"))
@@ -1509,12 +1511,8 @@ local function runReceiver()
     print("[TRADE][RECEIVER] Senders:", #CFG_SENDERS, "| Receivers:", #CFG_RECEIVERS,
           "| Items per sender:", itemsPerSender > 0 and itemsPerSender or "ALL")
 
-    -- Wait for at least 1 Sender to join (max 120s)
-    local senderPlayers = waitForAnySender(120)
-    if #senderPlayers == 0 then
-        warn("[TRADE][RECEIVER] No Sender found within 120s")
-        return
-    end
+    -- Wait for at least 1 Sender to join (no timeout)
+    local senderPlayers = waitForAnySender()
     print("[TRADE][RECEIVER] Found Senders:", #senderPlayers, "/", #CFG_SENDERS)
 
     -- Calculate expected items
@@ -1597,24 +1595,12 @@ local function runReceiver()
 
         print("[TRADE][RECEIVER] Round", round, "/", (totalRounds or "~"), "| expected batch:", expectedBatch)
 
-        -- 1st Accept: Wait for trade request popup (unlimited while senders online, 120s after they leave)
-        local waitTimeout = 120
-        local function anySenderOnline()
-            for _, sName in ipairs(CFG_SENDERS) do
-                if Players:FindFirstChild(sName) then return true end
-            end
-            return false
-        end
-        print("[TRADE][RECEIVER] Waiting for trade request (unlimited while senders online)...")
-        local gotRequest = clickAcceptTradeRequest(waitTimeout, anySenderOnline)
+        -- 1st Accept: Wait for trade request popup (no timeout)
+        print("[TRADE][RECEIVER] Waiting for trade request...")
+        local gotRequest = clickAcceptTradeRequest(nil, nil)
         if not gotRequest then
-            if not anySenderOnline() then
-                warn("[TRADE][RECEIVER] No senders left in server — stopping")
-            else
-                warn("[TRADE][RECEIVER] Trade request timeout — stopping")
-            end
-            break
-        end
+            warn("[TRADE][RECEIVER] Trade request accept failed — retrying")
+        else
 
         -- Count items before trade
         local beforeCount = countItems(localPlayer)
@@ -1666,15 +1652,6 @@ local function runReceiver()
             dismissTradeUI()
             task.wait(1)
             consecutiveFail = consecutiveFail + 1
-            -- Don't stop if senders are still online
-            local anyOnline = false
-            for _, sName in ipairs(CFG_SENDERS) do
-                if Players:FindFirstChild(sName) then anyOnline = true; break end
-            end
-            if not anyOnline then
-                warn("[TRADE][RECEIVER] Empty trades + all senders gone — stopping")
-                break
-            end
             if consecutiveFail >= 15 then
                 warn("[TRADE][RECEIVER]", consecutiveFail, "consecutive empty trades — stopping")
                 break
@@ -1771,15 +1748,6 @@ local function runReceiver()
             else
             consecutiveFail = consecutiveFail + 1
             warn("[TRADE][RECEIVER] Round", round, "no items gained — trade likely failed (fail", consecutiveFail, ")")
-            -- Only stop if senders are ALL gone from server
-            local anyOnline = false
-            for _, sName in ipairs(CFG_SENDERS) do
-                if Players:FindFirstChild(sName) then anyOnline = true; break end
-            end
-            if not anyOnline then
-                warn("[TRADE][RECEIVER] All senders left the server — stopping")
-                break
-            end
             -- Safety: if way too many fails, still stop
             if consecutiveFail >= 15 then
                 warn("[TRADE][RECEIVER]", consecutiveFail, "consecutive fails — stopping")
@@ -1803,6 +1771,7 @@ local function runReceiver()
         end
 
         end -- if not skipRound
+        end -- gotRequest else
     end
 
     -- === Final verification (backpack before/after comparison) ===
