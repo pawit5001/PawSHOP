@@ -388,7 +388,7 @@ local function waitForReceivers(timeoutSec)
             end
         end
         local found = getReceiverPlayers()
-        if #found == #CFG_RECEIVERS then return found end
+        if #found > 0 and #found == #CFG_RECEIVERS then return found end
         task.wait(1)
     end
     -- Return whatever was found
