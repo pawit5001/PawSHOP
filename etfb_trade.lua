@@ -1169,6 +1169,7 @@ local function runSender()
     local MAX_RETRIES = 10
     local confirmedSent = 0
     local confirmedTokenSent = 0
+    local batchCap = 9 -- dynamic cap, reduces after consecutive fails
     if not tokenOnly then
         print("[TRADE][SENDER] Initial matching items in backpack:", initialCount)
     end
@@ -1224,8 +1225,8 @@ local function runSender()
                 end
 
                 if availableSpace == nil or availableSpace > 0 then
-                    batchSize = math.min(needForThis, remaining, 9)
-                    if availableSpace and availableSpace < 9 then
+                    batchSize = math.min(needForThis, remaining, batchCap)
+                    if availableSpace and availableSpace < batchCap then
                         batchSize = math.min(batchSize, availableSpace)
                         print("[TRADE][SENDER] Receiver backpack:", getTotalBackpackCount(receiver), "/", bpMax, "→ batch capped to", batchSize)
                     end
@@ -1289,6 +1290,7 @@ local function runSender()
                     if (sentPerReceiver[receiverIdx] or 0) >= itemsPerReceiver then
                         print("[TRADE][SENDER] Receiver", receiver.Name, "got full", itemsPerReceiver, "→ next receiver")
                         receiverIdx = receiverIdx + 1
+                        batchCap = 9  -- reset for next receiver
                     end
                     retryCount = 0
                     if remaining > 0 then
@@ -1298,7 +1300,12 @@ local function runSender()
                 else
                     -- Items didn't decrease = trade failed, regardless of doTradeBatch result
                     retryCount = retryCount + 1
-                    warn("[TRADE][SENDER] Backpack unchanged (", beforeCount, "→", afterCount, ") — trade failed (attempt", retryCount, "/", MAX_RETRIES, ")")
+                    warn("[TRADE][SENDER] Backpack unchanged (", beforeCount, "→", afterCount, ") — trade failed (attempt", retryCount, "/", MAX_RETRIES, ") batchCap:", batchCap)
+                    -- Reduce batch cap after every 2 consecutive fails (receiver might be near full)
+                    if retryCount % 2 == 0 and batchCap > 1 then
+                        batchCap = math.max(1, math.floor(batchCap / 2))
+                        print("[TRADE][SENDER] Reducing batch cap to", batchCap, "(receiver may be near full)")
+                    end
                     -- Dismiss any leftover trade UI
                     dismissTradeUI()
                     if retryCount >= MAX_RETRIES then
@@ -1315,6 +1322,7 @@ local function runSender()
                             warn("[TRADE][SENDER] Max retries", MAX_RETRIES, "with no progress — skipping to next receiver")
                             receiverIdx = receiverIdx + 1
                             retryCount = 0
+                            batchCap = 9  -- reset for next receiver
                         end
                     else
                         task.wait(3)
@@ -1545,6 +1553,36 @@ local function runReceiver()
         end
 
         if not skipRound then
+
+        -- Check if offered items would overflow receiver's backpack
+        if not tokenOnlyMode and #recvItems > 0 then
+            local curCap, maxCap = getBackpackCapacity()
+            if curCap and maxCap then
+                local space = maxCap - curCap
+                if space <= 0 then
+                    warn("[TRADE][RECEIVER] Backpack is full (", curCap, "/", maxCap, ") — declining trade")
+                    dismissTradeUI()
+                    task.wait(1)
+                    backpackFull = true
+                    break
+                elseif #recvItems > space then
+                    warn("[TRADE][RECEIVER] Offered", #recvItems, "items but only", space, "space (", curCap, "/", maxCap, ") — declining trade")
+                    dismissTradeUI()
+                    task.wait(1)
+                    consecutiveFail = consecutiveFail + 1
+                    if consecutiveFail >= 5 then
+                        warn("[TRADE][RECEIVER] Too many oversize trades — marking backpack full")
+                        backpackFull = true
+                        break
+                    end
+                    skipRound = true
+                end
+            end
+        end
+
+        end -- first if not skipRound
+        if not skipRound then
+
         -- Receiver clicks Accept
         fireReady(expectedBatch)
         print("[TRADE][RECEIVER] 2nd Accept: Ready done!")
