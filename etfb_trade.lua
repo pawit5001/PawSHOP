@@ -1610,23 +1610,42 @@ local function runReceiver()
         -- Count items before trade
         local beforeCount = countItems(localPlayer)
 
-        -- 2nd Accept: Wait for Sender to place items + cooldown
-        local receiverWait = 8
-        print("[TRADE][RECEIVER] Waiting for Sender to place items (" .. receiverWait .. "s)...")
-        task.wait(receiverWait)
+        -- 2nd Accept: Poll until sender places items (or accepts), max 20s
+        print("[TRADE][RECEIVER] Waiting for Sender to place items...")
+        local recvItems = {}
+        local recvTokens = 0
+        local pollDeadline = tick() + 20
+        local stableCount = 0
+        local lastItemCount = 0
+        while tick() < pollDeadline do
+            recvItems = readTradeSlots("RecvOffer")
+            recvTokens = readTradeTokens("RecvOffer")
+            local hasContent = #recvItems > 0 or recvTokens > 0
+            if hasContent then
+                -- Items appeared — wait for count to stabilize (sender may still be placing)
+                if #recvItems == lastItemCount then
+                    stableCount = stableCount + 1
+                else
+                    stableCount = 0
+                    lastItemCount = #recvItems
+                end
+                -- Stable for 1.5s (3 checks) = sender is done placing
+                if stableCount >= 3 then
+                    break
+                end
+            end
+            task.wait(0.5)
+        end
 
-        -- Verify sender placed items in Trade UI
-        local recvItems = readTradeSlots("RecvOffer")
-        local recvTokens = readTradeTokens("RecvOffer")
         if #recvItems > 0 then
-            print("[TRADE][RECEIVER] ✓ Trade UI shows sender placed:", #recvItems, "item(s) →", table.concat(recvItems, ", "))
+            print("[TRADE][RECEIVER] ✓ Sender placed:", #recvItems, "item(s) →", table.concat(recvItems, ", "))
         else
             if not tokenOnlyMode then
-                warn("[TRADE][RECEIVER] ✗ No items found in RecvOffer!")
+                warn("[TRADE][RECEIVER] ✗ No items found in RecvOffer after polling!")
             end
         end
         if recvTokens > 0 then
-            print("[TRADE][RECEIVER] ✓ Trade UI shows sender offered:", recvTokens, "token(s)")
+            print("[TRADE][RECEIVER] ✓ Sender offered:", recvTokens, "token(s)")
         elseif tokenOnlyMode then
             warn("[TRADE][RECEIVER] ✗ Token-only mode but RecvOffer shows 0 tokens!")
         end
