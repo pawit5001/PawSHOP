@@ -102,7 +102,7 @@ resolveAutoFill()
 
 local CFG_ITEMS_NAME   = ENV.ItemsName   or {""}
 local CFG_ITEMS_AMOUNT_RAW = tonumber(ENV.ItemsAmount) or 0 -- per-name (0 = send all), total = ItemsAmount * #ItemsName
-local CFG_TOKEN_AMOUNT = math.max(0,  tonumber(ENV.TokenAmount) or 100)
+local CFG_TOKEN_AMOUNT = math.max(0,  tonumber(ENV.TokenAmount) or 0) -- tokens to send per batch (0 = none)
 local CFG_KICK_AFTER_DONE = (ENV.KickAfterDone == true) -- kick player after trade done (default false)
 
 -- Callback after Receiver gets all items
