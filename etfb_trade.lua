@@ -141,8 +141,6 @@ if not ENV.TaskAfterGetItems then
               "/ expected:", result.itemsExpected or "?",
               "| tokens:", result.tokens or 0,
               "| success:", result.success and "YES" or "NO")
-        task.wait(5)
-        callDone()
     end
 end
 
@@ -1869,7 +1867,7 @@ local function runReceiver()
         if shouldKick then
             print("[TRADE][RECEIVER] Calling done...")
             callDone()
-            task.wait(5) -- extra time for callback to finish
+            task.wait(2)
             local msg
             if backpackFull then
                 msg = "Backpack is full — received " .. actualItems .. " items"
@@ -1885,7 +1883,7 @@ local function runReceiver()
     if backpackFull and not (CFG_KICK_AFTER_DONE and isSuccess) then
         print("[TRADE][RECEIVER] Backpack is full — calling done + kick")
         callDone()
-        task.wait(5)
+        task.wait(2)
         local msg = "Backpack is full — received " .. actualItems .. " items"
         print("[TRADE][RECEIVER]", msg)
         localPlayer:Kick(msg)
