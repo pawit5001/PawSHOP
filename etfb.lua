@@ -11,7 +11,8 @@ local player = Players.LocalPlayer
 -- CONFIG
 _G.Display = _G.Display or {
     Brainrot = {""},
-    LuckyBlock = {""}
+    LuckyBlock = {""},
+    WaveShield = 0 -- 0 = ไม่แสดง, ใส่ตัวเลข = แสดงเฉพาะ cooldown <= ค่าที่กำหนด (วินาที)
 }
 
 -- Waiting PlayerGui path safely
@@ -23,6 +24,54 @@ local function waitForPath(path)
         if not current then return nil end
     end
     return current
+end
+
+-- WaveShield summary (only show ≤6s cooldown)
+local function getWaveShieldSummary()
+    local backpack = player:FindFirstChild("Backpack")
+    local char = player.Character
+    local sources = {}
+    if backpack then
+        for _, v in ipairs(backpack:GetChildren()) do table.insert(sources, v) end
+    end
+    if char then
+        for _, v in ipairs(char:GetChildren()) do
+            if v:IsA("Tool") then table.insert(sources, v) end
+        end
+    end
+
+    local maxCooldown = _G.Display.WaveShield or 0
+    if maxCooldown <= 0 then return "" end
+
+    local shieldCounts = {}
+    local shieldOrder = {}
+    for _, tool in ipairs(sources) do
+        local gearType = tool:GetAttribute("GearType")
+        if gearType == "Wave Shield" then
+            local cooldown = tool:GetAttribute("Cooldown")
+            if cooldown and cooldown <= maxCooldown then
+                local cd = string.format("%.1f", cooldown)
+                local key = cd .. "s"
+                if not shieldCounts[key] then
+                    shieldCounts[key] = 0
+                    table.insert(shieldOrder, key)
+                end
+                shieldCounts[key] = shieldCounts[key] + 1
+            end
+        end
+    end
+
+    if #shieldOrder == 0 then return "" end
+    local parts = {}
+    for _, key in ipairs(shieldOrder) do
+        local count = shieldCounts[key]
+        if count > 1 then
+            table.insert(parts, key .. " x" .. count)
+        else
+            table.insert(parts, key)
+        end
+    end
+    return table.concat(parts, ", ")
 end
 
 -- Backpack summary
@@ -131,6 +180,7 @@ local function sendDescription()
     local tokenObj   = waitForPath("HUD.BottomLeft.TradeTokens.Container.TradeTokens.Value")
     local rebirthObj = waitForPath("Menus.Toggles.Rebirth.ImageButton.TextLabel")
     local brainrotSummary,luckySummary = getBackpackSummary()
+    local shieldSummary = getWaveShieldSummary()
 
     local function safeValue(obj, valueField, textField)
         if not obj then return "null" end
@@ -163,6 +213,12 @@ local function sendDescription()
             backpackLog = backpackLog .. ", "
         end
         backpackLog = backpackLog .. "🎁: "..luckySummary
+    end
+    if shieldSummary ~= "" then
+        if backpackLog ~= "" then
+            backpackLog = backpackLog .. ", "
+        end
+        backpackLog = backpackLog .. "🛡️: "..shieldSummary
     end
 
     local description =
