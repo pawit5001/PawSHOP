@@ -61,17 +61,15 @@ local function getWaveShieldSummary()
         end
     end
 
-    if #shieldOrder == 0 then return "" end
+    if #shieldOrder == 0 then return "", 0 end
+    local total = 0
     local parts = {}
     for _, key in ipairs(shieldOrder) do
         local count = shieldCounts[key]
-        if count > 1 then
-            table.insert(parts, key .. " x" .. count)
-        else
-            table.insert(parts, key)
-        end
+        total = total + count
+        table.insert(parts, key .. " x" .. count)
     end
-    return table.concat(parts, ", ")
+    return table.concat(parts, ", "), total
 end
 
 -- Backpack summary
@@ -180,7 +178,7 @@ local function sendDescription()
     local tokenObj   = waitForPath("HUD.BottomLeft.TradeTokens.Container.TradeTokens.Value")
     local rebirthObj = waitForPath("Menus.Toggles.Rebirth.ImageButton.TextLabel")
     local brainrotSummary,luckySummary = getBackpackSummary()
-    local shieldSummary = getWaveShieldSummary()
+    local shieldSummary, shieldTotal = getWaveShieldSummary()
 
     local function safeValue(obj, valueField, textField)
         if not obj then return "null" end
@@ -218,7 +216,7 @@ local function sendDescription()
         if backpackLog ~= "" then
             backpackLog = backpackLog .. ", "
         end
-        backpackLog = backpackLog .. "🛡️: "..shieldSummary
+        backpackLog = backpackLog .. "🛡️(" .. shieldTotal .. "): " .. shieldSummary
     end
 
     local description =
