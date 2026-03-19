@@ -13,11 +13,21 @@
 --   getgenv().Receivers   = "UserC"   -- Senders empty → all other players become senders
 --   getgenv().Senders     = "UserA"   -- Receivers empty → all other players become receivers
 --
---   getgenv().ItemsName   = {"SkibidiToilet", "Cameraman"}
---   getgenv().ItemsAmount = 3            -- per-name amount (e.g. 3 names x 3 = 9 total, 0 = send all matching)
---   getgenv().TokenAmount = 0            -- tokens to send per batch (0 = none)
+--   getgenv().Items = {
+--       Enable = true,                   -- false = skip item trading
+--       Names  = {"SkibidiToilet", "Cameraman"},
+--       Amount = 3,                      -- per-name (0 = send all matching)
+--   }
+--   getgenv().Tokens = {
+--       Enable = true,                   -- false = skip token trading
+--       Amount = 100,                    -- tokens per batch (0 = none)
+--   }
+--   getgenv().WaveShield = {
+--       Enable = true,                   -- false = skip WaveShield trading
+--       CD     = 6,                      -- max cooldown seconds (0 = skip)
+--       Amount = 0,                      -- 0 = send all matching, >0 = limit
+--   }
 --   getgenv().KickAfterDone = true       -- kick after trade done (default false)
---   getgenv().WaveShield  = { CD = 6, Amount = 0 }  -- CD = max cooldown, Amount = 0 send all / >0 send that many
 --
 -- Supported scenarios:
 --   1 Sender  → many Receivers  (Senders="name", Receivers=nil → auto-filled)
@@ -101,13 +111,24 @@ local function resolveAutoFill()
 end
 resolveAutoFill()
 
-local CFG_ITEMS_NAME   = ENV.ItemsName   or {""}
-local CFG_ITEMS_AMOUNT_RAW = tonumber(ENV.ItemsAmount) or 0 -- per-name (0 = send all), total = ItemsAmount * #ItemsName
-local CFG_TOKEN_AMOUNT = math.max(0,  tonumber(ENV.TokenAmount) or 0) -- tokens to send per batch (0 = none)
-local CFG_KICK_AFTER_DONE = (ENV.KickAfterDone == true) -- kick player after trade done (default false)
+-- Items config
+local CFG_ITEMS = type(ENV.Items) == "table" and ENV.Items or {}
+local CFG_ITEMS_ENABLE = (CFG_ITEMS.Enable ~= false)
+local CFG_ITEMS_NAME   = CFG_ITEMS_ENABLE and (CFG_ITEMS.Names or {""}) or {}
+local CFG_ITEMS_AMOUNT_RAW = CFG_ITEMS_ENABLE and (tonumber(CFG_ITEMS.Amount) or 0) or 0
+
+-- Tokens config
+local CFG_TOKENS = type(ENV.Tokens) == "table" and ENV.Tokens or {}
+local CFG_TOKENS_ENABLE = (CFG_TOKENS.Enable ~= false)
+local CFG_TOKEN_AMOUNT = CFG_TOKENS_ENABLE and math.max(0, tonumber(CFG_TOKENS.Amount) or 0) or 0
+
+-- WaveShield config
 local CFG_WS = type(ENV.WaveShield) == "table" and ENV.WaveShield or {}
-local CFG_WS_CD = tonumber(CFG_WS.CD) or 0       -- 0 = don't trade WaveShield, >0 = trade WaveShield with Cooldown <= this value
-local CFG_WS_AMOUNT = tonumber(CFG_WS.Amount) or 0 -- 0 = send all matching, >0 = send at most this many total
+local CFG_WS_ENABLE = (CFG_WS.Enable ~= false)
+local CFG_WS_CD = CFG_WS_ENABLE and (tonumber(CFG_WS.CD) or 0) or 0
+local CFG_WS_AMOUNT = CFG_WS_ENABLE and (tonumber(CFG_WS.Amount) or 0) or 0
+
+local CFG_KICK_AFTER_DONE = (ENV.KickAfterDone == true)
 
 -- Run display script before calling done
 local function runDisplayBeforeDone()
@@ -1929,7 +1950,10 @@ local function runReceiver()
     -- ItemsAmount = 0 (send-all) → skip done+kick (receiver doesn't know when done).
     -- Auto-filled side = alts → kick. Explicitly set side = main → stay.
     -- If neither auto-filled: receiver kicks unless many→1.
-    if CFG_KICK_AFTER_DONE and isSuccess and CFG_ITEMS_AMOUNT_RAW > 0 then
+    local knowsTarget = CFG_ITEMS_AMOUNT_RAW > 0
+        or (CFG_WS_CD > 0 and CFG_WS_AMOUNT > 0)
+        or tokenOnlyMode
+    if CFG_KICK_AFTER_DONE and isSuccess and knowsTarget then
         local shouldKick
         if RECEIVERS_AUTO_FILLED then
             shouldKick = true  -- receiver is alt (auto-filled) → kick
