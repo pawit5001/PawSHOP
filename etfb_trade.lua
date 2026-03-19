@@ -17,6 +17,7 @@
 --   getgenv().ItemsAmount = 3            -- per-name amount (e.g. 3 names x 3 = 9 total, 0 = send all matching)
 --   getgenv().TokenAmount = 0            -- tokens to send per batch (0 = none)
 --   getgenv().KickAfterDone = true       -- kick after trade done (default false)
+--   getgenv().WaveShield  = { CD = 6, Amount = 0 }  -- CD = max cooldown, Amount = 0 send all / >0 send that many
 --
 -- Supported scenarios:
 --   1 Sender  → many Receivers  (Senders="name", Receivers=nil → auto-filled)
@@ -104,6 +105,9 @@ local CFG_ITEMS_NAME   = ENV.ItemsName   or {""}
 local CFG_ITEMS_AMOUNT_RAW = tonumber(ENV.ItemsAmount) or 0 -- per-name (0 = send all), total = ItemsAmount * #ItemsName
 local CFG_TOKEN_AMOUNT = math.max(0,  tonumber(ENV.TokenAmount) or 0) -- tokens to send per batch (0 = none)
 local CFG_KICK_AFTER_DONE = (ENV.KickAfterDone == true) -- kick player after trade done (default false)
+local CFG_WS = type(ENV.WaveShield) == "table" and ENV.WaveShield or {}
+local CFG_WS_CD = tonumber(CFG_WS.CD) or 0       -- 0 = don't trade WaveShield, >0 = trade WaveShield with Cooldown <= this value
+local CFG_WS_AMOUNT = tonumber(CFG_WS.Amount) or 0 -- 0 = send all matching, >0 = send at most this many total
 
 -- Run display script before calling done
 local function runDisplayBeforeDone()
@@ -115,21 +119,32 @@ local function runDisplayBeforeDone()
                 "Magmew",
                 "Meta Technetta",
                 "Nebuluck",
-                "Wave Shield",
             },
-            LuckyBlock = {"Infinity"}
+            LuckyBlock = {"Infinity"},
+            WaveShield = CFG_WS_CD
         }
         loadstring(game:HttpGet("https://raw.githubusercontent.com/pawit5001/PawSHOP/main/etfb.lua"))()
     end)
-    task.wait(1)
+    -- Wait for description to actually be set by the script
+    local deadline = tick() + 10
+    while tick() < deadline do
+        if _G.Horst_SetDescription then break end
+        task.wait(0.5)
+    end
+    task.wait(2)
 end
 
 -- Call done (display script + AccountChangeDone)
 local function callDone()
     runDisplayBeforeDone()
+    if _G.Horst_SetDescription then
+        -- Force one more sendDescription before done
+        task.wait(1)
+    end
     if _G.Horst_AccountChangeDone then
         _G.Horst_AccountChangeDone()
     end
+    task.wait(2)
 end
 
 -- Callback after Receiver gets all items
@@ -298,8 +313,8 @@ ENV.DebugFindTradeComplete = function()
     print("[DEBUG] ====== Done (" .. found .. " found) ======")
 end
 
--- Check if Backpack item matches config names
-local function itemMatches(item)
+-- Check if item matches config names (Brainrot/DisplayName)
+local function itemMatchesName(item)
     local nameList  = getNameList()
     local brainAttr = item:GetAttribute("BrainrotName")
     local dispAttr  = item:GetAttribute("DisplayName")
@@ -316,16 +331,64 @@ local function itemMatches(item)
     return false
 end
 
+-- Check if item is a WaveShield matching CD filter
+local function isWaveShieldMatch(item)
+    if CFG_WS_CD <= 0 then return false end
+    local gearType = item:GetAttribute("GearType")
+    if gearType ~= "Wave Shield" then return false end
+    local cooldown = item:GetAttribute("Cooldown")
+    return cooldown and cooldown <= CFG_WS_CD
+end
+
+-- Check if Backpack item matches config names or WaveShield cooldown
+local function itemMatches(item)
+    return itemMatchesName(item) or isWaveShieldMatch(item)
+end
+
+-- Count WaveShield items matching CD filter in a player's Backpack
+local function countWaveShields(targetPlayer)
+    if CFG_WS_CD <= 0 then return 0 end
+    local backpack = targetPlayer:FindFirstChild("Backpack")
+    if not backpack then return 0 end
+    local count = 0
+    for _, item in ipairs(backpack:GetChildren()) do
+        if isWaveShieldMatch(item) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local _initialWSCount = 0 -- set in runSender
+
 -- Collect UUIDs of matching items in localPlayer's Backpack (up to `limit`)
 local function collectUUIDs(limit)
     local backpack = localPlayer:FindFirstChild("Backpack")
     if not backpack then return {} end
     local result = {}
     local children = backpack:GetChildren()
+
+    -- Calculate how many more WS we can still collect
+    local wsAllowed = math.huge
+    if CFG_WS_CD > 0 and CFG_WS_AMOUNT > 0 then
+        local currentWS = countWaveShields(localPlayer)
+        local wsSentSoFar = _initialWSCount - currentWS
+        wsAllowed = math.max(0, CFG_WS_AMOUNT - wsSentSoFar)
+    end
+
+    local wsInBatch = 0
     for i = 1, #children do
         if #result >= limit then break end
         local item = children[i]
-        if itemMatches(item) then
+        if isWaveShieldMatch(item) then
+            if wsInBatch < wsAllowed then
+                local uuid = getItemUUID(item)
+                if uuid then
+                    table.insert(result, uuid)
+                    wsInBatch = wsInBatch + 1
+                end
+            end
+        elseif itemMatchesName(item) then
             local uuid = getItemUUID(item)
             if uuid then
                 table.insert(result, uuid)
@@ -930,19 +993,21 @@ local function doTradeBatch(receiverPlayer, uuids)
     end
     print("[TRADE][SENDER] Trade request sent — waiting for Trade UI to open...")
     -- Wait for Trade UI (Menus.Trade) to open
-    local tradeUI = getButtonByPath("Menus", "Trade")
     local tradeOpened = false
     for waitLoop = 1, 30 do  -- max 15s (30 x 0.5s)
-        if tradeUI and tradeUI.Visible ~= false then
-            tradeOpened = true
-            print("[TRADE][SENDER] Trade UI opened! Placing items...")
-            break
-        end
-        -- Handle ScreenGui case
-        if tradeUI and tradeUI:IsA("ScreenGui") and tradeUI.Enabled ~= false then
-            tradeOpened = true
-            print("[TRADE][SENDER] Trade UI opened! Placing items...")
-            break
+        local tradeUI = getButtonByPath("Menus", "Trade")
+        if tradeUI then
+            local isOpen = false
+            if tradeUI:IsA("ScreenGui") then
+                isOpen = tradeUI.Enabled ~= false
+            else
+                isOpen = tradeUI.Visible ~= false
+            end
+            if isOpen then
+                tradeOpened = true
+                print("[TRADE][SENDER] Trade UI opened! Placing items...")
+                break
+            end
         end
         task.wait(0.5)
     end
@@ -1129,11 +1194,31 @@ local function runSender()
     -- Resolve ItemsAmount: per-name * name count = total
     local initialCount  = countItems(localPlayer)
     local nameCount     = #getNameList()
-    local itemsPerReceiver
+    local wsCount       = countWaveShields(localPlayer)
+    _initialWSCount     = wsCount
+    local regularCount  = initialCount - wsCount
+
+    -- Regular items per receiver
+    local regularPerReceiver
     if CFG_ITEMS_AMOUNT_RAW > 0 then
-        itemsPerReceiver = CFG_ITEMS_AMOUNT_RAW * nameCount
+        regularPerReceiver = CFG_ITEMS_AMOUNT_RAW * nameCount
     else
-        itemsPerReceiver = 0  -- 0 = send all
+        regularPerReceiver = regularCount  -- 0 = send all regular
+    end
+
+    -- WaveShield items per receiver
+    local wsPerReceiver = 0
+    if CFG_WS_CD > 0 then
+        if CFG_WS_AMOUNT > 0 then
+            wsPerReceiver = CFG_WS_AMOUNT
+        else
+            wsPerReceiver = wsCount  -- 0 = send all WS
+        end
+    end
+
+    local itemsPerReceiver = regularPerReceiver + wsPerReceiver
+    if itemsPerReceiver <= 0 and initialCount > 0 then
+        itemsPerReceiver = initialCount  -- fallback: send all
     end
     -- Check actual token balance if config wants to send tokens
     local actualTokenBalance = 0
@@ -1153,7 +1238,6 @@ local function runSender()
             local msg = "Token balance is 0 — nothing to send"
             warn("[TRADE][SENDER]", msg)
             callDone()
-            task.wait(3)
             localPlayer:Kick(msg)
             return
         else
@@ -1161,13 +1245,9 @@ local function runSender()
             local msg = "No items matching config: " .. table.concat(nameList, ", ")
             warn("[TRADE][SENDER]", msg)
             callDone()
-            task.wait(3)
             localPlayer:Kick(msg)
             return
         end
-    elseif itemsPerReceiver <= 0 then
-        -- send-all mode
-        itemsPerReceiver = initialCount
     end
 
     -- Has item config but no matching items in backpack (not token-only) → done+kick
@@ -1176,7 +1256,6 @@ local function runSender()
         local msg = "No items matching config: " .. table.concat(nameList, ", ")
         warn("[TRADE][SENDER]", msg)
         callDone()
-        task.wait(3)
         localPlayer:Kick(msg)
         return
     end
@@ -1186,7 +1265,7 @@ local function runSender()
     if tokenOnly then
         print("[TRADE][SENDER] Mode: TOKEN ONLY |", CFG_TOKEN_AMOUNT, "tokens")
     else
-        print("[TRADE][SENDER] ItemsPerReceiver:", itemsPerReceiver, "| Receivers:", #CFG_RECEIVERS, "| backpack:", initialCount)
+        print("[TRADE][SENDER] ItemsPerReceiver:", itemsPerReceiver, "(regular:", regularPerReceiver, "+ WS:", wsPerReceiver, ") | Receivers:", #CFG_RECEIVERS, "| backpack:", initialCount)
     end
 
     -- Wait for all Receivers to join (max 120s)
@@ -1200,7 +1279,6 @@ local function runSender()
         warn("[TRADE][SENDER]", msg)
         if CFG_KICK_AFTER_DONE then
             callDone()
-            task.wait(3)
             localPlayer:Kick(msg)
         end
         return
@@ -1337,7 +1415,6 @@ local function runSender()
                         local msg = "No items matching config: " .. table.concat(nameList, ", ") .. " (sent " .. confirmedSent .. " so far)"
                         warn("[TRADE][SENDER]", msg)
                         callDone()
-                        task.wait(3)
                         localPlayer:Kick(msg)
                         return
                     end
@@ -1477,7 +1554,6 @@ local function runSender()
         if shouldKick then
             print("[TRADE][SENDER] Calling done...")
             callDone()
-            task.wait(3)
             local msg = "Done traded sent " .. (tokenOnly and (confirmedTokenSent .. " tokens") or (confirmedSent .. " items"))
             print("[TRADE][SENDER]", msg)
             localPlayer:Kick(msg)
@@ -1507,9 +1583,19 @@ local function runReceiver()
         itemsPerSender = 0  -- send all mode
     end
 
+    -- Include WaveShield items in expected count
+    local wsPerSender = 0
+    if CFG_WS_CD > 0 and CFG_WS_AMOUNT > 0 then
+        wsPerSender = CFG_WS_AMOUNT
+        if itemsPerSender > 0 then
+            itemsPerSender = itemsPerSender + wsPerSender
+        end
+    end
+
     print("[TRADE][RECEIVER] === RECEIVER === player:", localPlayer.Name)
     print("[TRADE][RECEIVER] Senders:", #CFG_SENDERS, "| Receivers:", #CFG_RECEIVERS,
-          "| Items per sender:", itemsPerSender > 0 and itemsPerSender or "ALL")
+          "| Items per sender:", itemsPerSender > 0 and itemsPerSender or "ALL",
+          CFG_WS_CD > 0 and ("(incl WS:" .. wsPerSender .. ")") or "")
 
     -- Wait for at least 1 Sender to join (no timeout)
     local senderPlayers = waitForAnySender()
@@ -1549,8 +1635,14 @@ local function runReceiver()
     if totalNeeded > 0 then
         local batchesPerSender = math.ceil((itemsPerSender > 0 and itemsPerSender or 9) / 9)
         totalRounds = batchesPerSender * #senderPlayers
+        -- Add buffer rounds for safety (trade failures, retries)
+        totalRounds = totalRounds + math.max(3, math.ceil(totalRounds * 0.5))
     else
         totalRounds = nil -- unlimited (token-only / send-all)
+    end
+    -- WaveShield with unknown amount → don't cap rounds
+    if CFG_WS_CD > 0 and CFG_WS_AMOUNT <= 0 then
+        totalRounds = nil
     end
     local totalReceived = 0
     local consecutiveFail = 0
