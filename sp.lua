@@ -32,16 +32,26 @@ local function mapItemName(name)
     return itemNameMap[name] or name
 end
 
--- ฟังก์ชันตรวจสอบของใน Backpack สำหรับ Melee/Sword
+-- ฟังก์ชันตรวจสอบของใน Backpack + Character สำหรับ Melee/Sword
 local function checkItems(itemList)
     local backpack = players.Backpack
+    local character = players.Character
     local result = {}
     for _, itemName in ipairs(itemList) do
         local found = false
+        local lower = itemName:lower()
         for _, item in ipairs(backpack:GetChildren()) do
-            if item.Name == itemName then
+            if item.Name:lower() == lower then
                 found = true
                 break
+            end
+        end
+        if not found and character then
+            for _, item in ipairs(character:GetChildren()) do
+                if item.Name:lower() == lower then
+                    found = true
+                    break
+                end
             end
         end
         local displayName = mapItemName(itemName)
@@ -137,9 +147,9 @@ task.spawn(function()
         local race = players:GetAttribute("CurrentRace") or "None"
         local clan = players:GetAttribute("CurrentClan") or "None"
         -- Luck Stat
-        local luckStat = players.PlayerGui.StatsPanelUI.MainFrame.Frame.Content.Page3.LeftSideStatsFrame.Stats.StatsUtility.Stat1.Stat.Text
+        local luckStat = players.PlayerGui.StatsPanelUI.MainFrame.Frame.Content.Page3.LeftSideStatsFrame.Stats.StatsUtility.Stat1.Stat.Text:gsub("^%+", "")
         -- Damage Stat
-        local damageStat = players.PlayerGui.StatsPanelUI.MainFrame.Frame.Content.Page3.LeftSideStatsFrame.Stats.StatsOffense.Stat1.Stat.Text
+        local damageStat = players.PlayerGui.StatsPanelUI.MainFrame.Frame.Content.Page3.LeftSideStatsFrame.Stats.StatsOffense.Stat1.Stat.Text:gsub("^%+", "")
         -- Trait
         local traitRaw = players.PlayerGui.StatsPanelUI.MainFrame.Frame.Content.SideFrame.UserStats.TraitEquipped.StatName.Text
         local trait = traitRaw:gsub("Trait: ", "")
