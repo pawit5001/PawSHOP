@@ -188,11 +188,12 @@ task.spawn(function()
             return HttpService:JSONEncode(json_data)
         end)
 
+        -- ให้ `Horst_SetDescription` รับทั้งข้อความและ JSON (แม้ encode ล้มเหลวจะส่งเป็น empty string)
+        local encodedStr = ""
         if ok and encoded then
-            pcall(function() _G.Horst_SetDescription(messages, encoded) end)
+            encodedStr = encoded
             _G.Horst_SheetJSON = encoded
-        else
-            pcall(function() _G.Horst_SetDescription(messages) end)
         end
+        pcall(function() _G.Horst_SetDescription(messages, encodedStr) end)
     end
 end)
