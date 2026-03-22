@@ -169,26 +169,21 @@ task.spawn(function()
         -- สร้าง table สำหรับ encode เป็น JSON
         local json_data = {
             Level = level,
-            Money = money,
-            MoneyDisplay = moneyStr,
-            Gems = gems,
-            GemsDisplay = gemsStr,
+            Melee = meleeStatus,
+            Sword = swordStatus,
+            Money = moneyStr,
+            Gems = gemsStr,
             Race = race,
             Clan = clan,
             Trait = trait,
             Damage = damageStat,
             Luck = luckStat,
-            Melee = meleeStatus,
-            Sword = swordStatus,
-            Description = messages,
-            Timestamp = os.time()
         }
 
         local ok, encoded = pcall(function()
             return HttpService:JSONEncode(json_data)
         end)
 
-        -- ให้ `Horst_SetDescription` รับทั้งข้อความและ JSON (แม้ encode ล้มเหลวจะส่งเป็น empty string)
         local encodedStr = ""
         if ok and encoded then
             encodedStr = encoded
