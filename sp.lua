@@ -8,6 +8,7 @@ task.wait(5)
 print("Log SP is now ready")
 
 local players = game:GetService("Players").LocalPlayer
+local HttpService = game:GetService("HttpService")
 
 -- ฟังก์ชันแปลงตัวเลขเป็น K/M/B
 local function formatNumber(num)
@@ -164,6 +165,34 @@ task.spawn(function()
             "Lv.%s 👊: %s ⚔️: %s 💵: %s 💠: %s 🧬: %s 👑: %s 🧩: %s 💥: %s 🍀: %s",
             level, meleeStatus, swordStatus, moneyStr, gemsStr, race, clan, trait, damageStat, luckStat
         )
-        _G.Horst_SetDescription(messages)
+
+        -- สร้าง table สำหรับ encode เป็น JSON
+        local json_data = {
+            Level = level,
+            Money = money,
+            MoneyDisplay = moneyStr,
+            Gems = gems,
+            GemsDisplay = gemsStr,
+            Race = race,
+            Clan = clan,
+            Trait = trait,
+            Damage = damageStat,
+            Luck = luckStat,
+            Melee = meleeStatus,
+            Sword = swordStatus,
+            Description = messages,
+            Timestamp = os.time()
+        }
+
+        local ok, encoded = pcall(function()
+            return HttpService:JSONEncode(json_data)
+        end)
+
+        if ok and encoded then
+            pcall(function() _G.Horst_SetDescription(messages, encoded) end)
+            _G.Horst_SheetJSON = encoded
+        else
+            pcall(function() _G.Horst_SetDescription(messages) end)
+        end
     end
 end)

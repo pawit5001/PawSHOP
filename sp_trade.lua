@@ -110,6 +110,10 @@ local function sendTradeRequest(targetName)
     return true
 end
 
+local function addItemToTrade(itemName, amount)
+    TradeRemotes:WaitForChild("AddItemToTrade"):FireServer("Items", itemName, amount)
+end
+
 local function setReady()
     TradeRemotes:WaitForChild("SetReady"):FireServer(true)
 end
@@ -158,10 +162,12 @@ local function toggleInventoryUI()
     local invUI = gui:FindFirstChild("InventoryPanelUI")
     if not invUI then return end
     if invUI:IsA("ScreenGui") then
+        -- Close then re-open
         invUI.Enabled = false
-        task.wait(0.15)
-        invUI.Enabled = true
         task.wait(0.3)
+        invUI.Enabled = true
+        task.wait(0.5)
+        print("[TRADE] InventoryPanelUI toggled (close→open) to refresh")
     end
 end
 
@@ -177,11 +183,13 @@ local function toggleTradeInventoryUI()
         path = path:FindFirstChild(name)
         if not path then return end
     end
+    -- Toggle visibility
     if path:IsA("GuiObject") then
         path.Visible = false
-        task.wait(0.15)
-        path.Visible = true
         task.wait(0.3)
+        path.Visible = true
+        task.wait(0.5)
+        print("[TRADE] Trade InventoryPopup toggled (close→open) to refresh")
     end
 end
 
@@ -344,6 +352,49 @@ local function scanTradeSlots()
                     -- Strip non-numeric chars (e.g. "x15" → 15)
                     local qty = tonumber(qtyText:match("%d+")) or 1
                     table.insert(slots, {name = itemName, quantity = qty})
+                end
+            end
+        end
+    end
+    return slots
+end
+
+-- Scan Player2's trade slots (the other player's offered items)
+-- Path: InTradingUI.MainFrame.Frame.Content.Player2Side.Player2Holder.Player2Items.TradeSlot_N.Slot.Holder.ItemName / Quantity
+-- Returns array: { {name="Obsidian", quantity=9}, ... }
+local function scanPlayer2TradeSlots()
+    local gui = localPlayer:FindFirstChild("PlayerGui")
+    if not gui then return {} end
+    local tradingUI = gui:FindFirstChild("InTradingUI")
+    if not tradingUI then return {} end
+    local mainFrame = tradingUI:FindFirstChild("MainFrame")
+    if not mainFrame then return {} end
+    local frame = mainFrame:FindFirstChild("Frame")
+    if not frame then return {} end
+    local content = frame:FindFirstChild("Content")
+    if not content then return {} end
+    local p2Side = content:FindFirstChild("Player2Side")
+    if not p2Side then return {} end
+    local p2Holder = p2Side:FindFirstChild("Player2Holder")
+    if not p2Holder then return {} end
+    local p2Items = p2Holder:FindFirstChild("Player2Items")
+    if not p2Items then return {} end
+
+    local slots = {}
+    for _, child in ipairs(p2Items:GetChildren()) do
+        if string.sub(child.Name, 1, 10) == "TradeSlot_" then
+            local slot = child:FindFirstChild("Slot")
+            if slot then
+                local holder = slot:FindFirstChild("Holder")
+                if holder then
+                    local nameLabel = holder:FindFirstChild("ItemName")
+                    local qtyLabel = holder:FindFirstChild("Quantity")
+                    local itemName = nameLabel and nameLabel.Text or "?"
+                    local qtyText = qtyLabel and qtyLabel.Text or "1"
+                    local qty = tonumber(qtyText:match("%d+")) or 1
+                    if itemName ~= "?" and itemName ~= "" then
+                        table.insert(slots, {name = itemName, quantity = qty})
+                    end
                 end
             end
         end
@@ -611,33 +662,8 @@ end
 
 -- =================== TRADE STATE CHECKS ===================
 
--- Sender checks if receiver (Player2) ReadyIndicator is visible
-local function isOtherPlayerReady()
-    local gui = localPlayer:FindFirstChild("PlayerGui")
-    if not gui then return false end
-    local tradingUI = gui:FindFirstChild("InTradingUI")
-    if not tradingUI then return false end
-    for _, desc in ipairs(tradingUI:GetDescendants()) do
-        if desc.Name == "ReadyIndicator" and desc:IsA("GuiObject") and desc.Visible then
-            if string.find(desc:GetFullName(), "Player2") then
-                return true
-            end
-        end
-    end
-    return false
-end
-
--- Receiver checks if sender is ready
--- Uses descendant search + state-change detection for robustness
-local _riStates = {}   -- track current state strings for change logging
-local _riInitial = {}  -- initial state for change-based detection
-
-local function resetReadyDetection()
-    _riStates = {}
-    _riInitial = {}
-end
-
-local function isSenderReadyFromReceiver()
+-- Check if the other player's ReadyIndicator is visible on a specific side
+local function isPlayerReadyOnSide(checkSide)
     local gui = localPlayer:FindFirstChild("PlayerGui")
     if not gui then return false end
     local tradingUI = gui:FindFirstChild("InTradingUI")
@@ -645,49 +671,73 @@ local function isSenderReadyFromReceiver()
 
     for _, desc in ipairs(tradingUI:GetDescendants()) do
         if desc.Name == "ReadyIndicator" then
-            local path = desc:GetFullName()
-            local vis = false
-            pcall(function() vis = desc.Visible end)
-            local txtChild = desc:FindFirstChild("Txt")
-            local txtVal = ""
-            if txtChild then pcall(function() txtVal = txtChild.Text or "" end) end
-
-            -- Log state changes (only prints when something changes)
-            local stateStr = tostring(vis) .. "|" .. txtVal
-            if _riStates[path] ~= stateStr then
-                _riStates[path] = stateStr
-                print("[TRADE][RI]", path, "Vis=" .. tostring(vis), "Txt=" .. txtVal)
-            end
-
-            -- Store initial state on first encounter
-            if _riInitial[path] == nil then
-                _riInitial[path] = {vis = vis, txt = txtVal}
-            end
-
-            -- Primary: visible + READY text
-            if vis and txtVal:upper() == "READY" then
-                return true
-            end
-
-            -- Secondary: detect state change from initial
-            local init = _riInitial[path]
-            if init and (vis ~= init.vis or txtVal ~= init.txt) then
-                print("[TRADE][RI] Changed!", "Was: Vis=" .. tostring(init.vis) .. " Txt=" .. init.txt,
-                    "Now: Vis=" .. tostring(vis) .. " Txt=" .. txtVal)
-                return true
+            local fullName = desc:GetFullName()
+            if string.find(fullName, checkSide) then
+                if desc:IsA("GuiObject") and desc.Visible then
+                    return true
+                end
             end
         end
     end
     return false
 end
 
--- Compare two inventory snapshots, return true if different
-local function hasInventoryChanged(before, after)
-    for name in pairs(before) do
-        if (after[name] or 0) ~= before[name] then return true end
+-- Sender checks if receiver (Player2) is ready
+local function isOtherPlayerReady()
+    return isPlayerReadyOnSide("Player2")
+end
+
+-- Receiver checks if sender is ready
+-- Path: Player2Side.Player2Holder.Player2Holder.ReadyIndicator.Txt  (Text == "READY" means sender pressed Ready)
+local function isSenderReadyFromReceiver()
+    local gui = localPlayer:FindFirstChild("PlayerGui")
+    if not gui then return false end
+    local tradingUI = gui:FindFirstChild("InTradingUI")
+    if not tradingUI then return false end
+
+    local path = tradingUI
+    for _, name in ipairs({"MainFrame", "Frame", "Content", "Player2Side", "Player2Holder", "Player2Holder", "ReadyIndicator"}) do
+        path = path:FindFirstChild(name)
+        if not path then return false end
     end
-    for name in pairs(after) do
-        if (before[name] or 0) ~= after[name] then return true end
+
+    -- Check visibility first
+    if path:IsA("GuiObject") and not path.Visible then return false end
+
+    -- Check Txt child text
+    local txt = path:FindFirstChild("Txt")
+    if txt and txt:IsA("TextLabel") then
+        local val = (txt.Text or ""):upper()
+        if val == "READY" then return true end
+    end
+
+    return false
+end
+
+-- Check if items appeared in the trade from the other side (Player2's offer)
+local function otherPlayerHasItems()
+    local gui = localPlayer:FindFirstChild("PlayerGui")
+    if not gui then return false end
+    local tradingUI = gui:FindFirstChild("InTradingUI")
+    if not tradingUI then return false end
+
+    -- Look for Player2Holder or Player2Side items
+    for _, desc in ipairs(tradingUI:GetDescendants()) do
+        local fullName = desc:GetFullName()
+        if string.find(fullName, "Player2") and string.find(fullName, "Offer") then
+            if desc:IsA("Frame") or desc:IsA("ScrollingFrame") then
+                local children = desc:GetChildren()
+                local itemCount = 0
+                for _, child in ipairs(children) do
+                    if child:IsA("ImageButton") or child:IsA("TextButton") or child:IsA("ImageLabel") then
+                        itemCount = itemCount + 1
+                    end
+                end
+                if itemCount > 0 then
+                    return true
+                end
+            end
+        end
     end
     return false
 end
@@ -698,11 +748,13 @@ local function runSender()
     local configNames = getItemNameList()
     local amount = CFG_ITEMS_AMOUNT
 
+    -- Fire RequestInventory + toggle UI to force refresh
     requestInventory()
-    task.wait(0.5)
+    task.wait(1)
     toggleInventoryUI()
-    task.wait(0.5)
+    task.wait(1)
 
+    -- Pre-trade inventory snapshot (outside trade — InventoryPanelUI)
     local invBefore = scanPlayerInventory()
     printInventory("[TRADE][SENDER] Inventory before:", invBefore)
 
@@ -725,7 +777,8 @@ local function runSender()
 
             -- 3. Add items (only if enabled)
             if CFG_ITEMS_ENABLE then
-                task.wait(0.5)
+                -- Toggle trade inventory popup to refresh, then scan
+                task.wait(1)
                 toggleTradeInventoryUI()
                 local tradeInv = scanInventoryUI()
                 printInventory("[TRADE][SENDER] Trade UI inventory:", tradeInv)
@@ -816,50 +869,64 @@ local function runSender()
                 end
             end
 
-            -- 4. Set ready
+            -- 4. Set ready (fire remote + click UI button)
             setReady()
-            task.wait(0.3)
+            task.wait(0.5)
             clickReadyButton("Player1Side")
             print("[TRADE][SENDER] Ready!")
 
-            -- 5. Wait for receiver to be ready
+            -- 5. Wait for receiver to be ready (poll up to 30s)
             print("[TRADE][SENDER] Waiting for receiver to be ready...")
             local otherReady = false
-            for t = 1, 40 do
+            for t = 1, 30 do
                 if isOtherPlayerReady() then
                     otherReady = true
                     print("[TRADE][SENDER] Receiver is ready!")
                     break
                 end
-                task.wait(0.5)
+                task.wait(1)
             end
             if not otherReady then
-                warn("[TRADE][SENDER] Receiver not ready in 20s — confirming anyway")
+                warn("[TRADE][SENDER] Receiver not ready in 30s — confirming anyway")
             end
 
-            -- 6. Confirm trade
-            task.wait(2)
+            -- 6. Wait 5s cooldown then confirm (fire remote + click UI button)
+            print("[TRADE][SENDER] Waiting 5s before confirm...")
+            task.wait(5)
             confirmTrade()
-            task.wait(0.3)
+            task.wait(0.5)
             clickConfirmTrade("Player1Side")
             print("[TRADE][SENDER] Confirmed!")
 
             -- 7. Wait for trade to complete — spam confirm + check inventory
             print("[TRADE][SENDER] Waiting for trade to complete...")
             local tradeDone = false
-            for t = 1, 20 do
+            for t = 1, 30 do
                 if not isTradingUIOpen() then
                     print("[TRADE][SENDER] Trade UI closed!")
                     tradeDone = true
                     break
                 end
+                -- Keep spamming confirm in case it didn't go through
                 pcall(function() confirmTrade() end)
                 pcall(function() clickConfirmTrade("Player1Side") end)
-                if t >= 2 then
+                -- After 1s, refresh inventory to detect trade completion
+                if t >= 1 and t % 2 == 0 then
                     requestInventory()
+                    task.wait(0.3)
                     toggleInventoryUI()
+                    task.wait(0.5)
                     local invCheck = scanPlayerInventory()
-                    if hasInventoryChanged(invBefore, invCheck) then
+                    local changed = false
+                    for name in pairs(invBefore) do
+                        if (invCheck[name] or 0) ~= invBefore[name] then changed = true break end
+                    end
+                    if not changed then
+                        for name in pairs(invCheck) do
+                            if (invBefore[name] or 0) ~= invCheck[name] then changed = true break end
+                        end
+                    end
+                    if changed then
                         print("[TRADE][SENDER] Inventory changed — trade completed!")
                         tradeDone = true
                         break
@@ -868,15 +935,17 @@ local function runSender()
                 task.wait(1)
             end
             if not tradeDone and isTradingUIOpen() then
-                warn("[TRADE][SENDER] Trade UI still open after 20s — force closing")
+                warn("[TRADE][SENDER] Trade UI still open after 30s — force closing")
                 closeTrade()
-                task.wait(0.5)
+                task.wait(1)
             end
 
-            task.wait(0.5)
+            -- Post-trade inventory check — toggle UI to refresh counts
+            task.wait(1)
             requestInventory()
+            task.wait(1)
             toggleInventoryUI()
-            task.wait(0.5)
+            task.wait(1)
             local invAfterTrade = scanPlayerInventory()
             printInventoryDiff("[TRADE][SENDER] After trade with " .. receiverName .. ":", invBefore, invAfterTrade)
             invBefore = invAfterTrade
@@ -885,9 +954,11 @@ local function runSender()
         end
     end
 
+    -- Final inventory (refresh UI first)
     requestInventory()
+    task.wait(1)
     toggleInventoryUI()
-    task.wait(0.5)
+    task.wait(1)
     local invFinal = scanPlayerInventory()
     printInventory("[TRADE][SENDER] Final inventory:", invFinal)
 
@@ -898,11 +969,13 @@ end
 local function runReceiver()
     print("[TRADE] Receiver starting...")
 
+    -- Fire RequestInventory + toggle UI to force refresh
     requestInventory()
-    task.wait(0.5)
+    task.wait(1)
     toggleInventoryUI()
-    task.wait(0.5)
+    task.wait(1)
 
+    -- Pre-trade inventory snapshot (outside trade — InventoryPanelUI)
     local invBefore = scanPlayerInventory()
     printInventory("[TRADE][RECEIVER] Inventory before:", invBefore)
 
@@ -934,19 +1007,19 @@ local function runReceiver()
 
             -- 3. Wait for sender to press Ready, then receiver presses Ready, then Confirm
             local tradeCompleted = false
-            resetReadyDetection()
 
-            -- Phase 1: Wait for sender to press Ready
+            -- Phase 1: Wait for sender to add items + press Ready
+            -- Minimum 5s wait to let UI settle, then check sender's ReadyIndicator
             print("[TRADE][RECEIVER] Waiting for sender to press Ready...")
             local senderReadyDetected = false
-            for t = 1, 30 do
+            for t = 1, 45 do
                 if not isTradingUIOpen() then
                     print("[TRADE][RECEIVER] Trade UI closed!")
                     tradeCompleted = true
                     break
                 end
-                -- Start checking after 3s to let UI settle
-                if t >= 3 and isSenderReadyFromReceiver() then
+                -- Only start checking after 5s to avoid false positives during UI load
+                if t >= 5 and isSenderReadyFromReceiver() then
                     senderReadyDetected = true
                     print("[TRADE][RECEIVER] Sender pressed Ready! (detected at " .. t .. "s)")
                     break
@@ -954,7 +1027,7 @@ local function runReceiver()
                 task.wait(1)
             end
             if not tradeCompleted and not senderReadyDetected then
-                print("[TRADE][RECEIVER] Sender Ready not detected in 30s — pressing Ready anyway")
+                print("[TRADE][RECEIVER] Sender Ready not detected in 45s — pressing Ready anyway")
             end
 
             -- Phase 2: Spam Ready until button text changes from "READY"
@@ -979,19 +1052,31 @@ local function runReceiver()
             -- Phase 3: Spam Confirm + check inventory to detect trade completion
             if not tradeCompleted then
                 print("[TRADE][RECEIVER] Pressing Confirm...")
-                for t = 1, 20 do
+                for t = 1, 30 do
                     if not isTradingUIOpen() then
-                        print("[TRADE][RECEIVER] Trade UI closed!")
+                        print("[TRADE][RECEIVER] Trade UI closed — trade completed!")
                         tradeCompleted = true
                         break
                     end
                     pcall(function() confirmTrade() end)
                     pcall(function() clickConfirmTrade("Player2Side") end)
-                    if t >= 2 then
+                    -- After 1s, refresh inventory to detect trade completion
+                    if t >= 1 and t % 2 == 0 then
                         requestInventory()
+                        task.wait(0.3)
                         toggleInventoryUI()
+                        task.wait(0.5)
                         local invCheck = scanPlayerInventory()
-                        if hasInventoryChanged(invBefore, invCheck) then
+                        local changed = false
+                        for name in pairs(invCheck) do
+                            if (invBefore[name] or 0) ~= invCheck[name] then changed = true break end
+                        end
+                        if not changed then
+                            for name in pairs(invBefore) do
+                                if (invCheck[name] or 0) ~= invBefore[name] then changed = true break end
+                            end
+                        end
+                        if changed then
                             print("[TRADE][RECEIVER] Inventory changed — trade completed!")
                             tradeCompleted = true
                             break
@@ -1005,25 +1090,29 @@ local function runReceiver()
                 if not isTradingUIOpen() then
                     print("[TRADE][RECEIVER] Trade UI closed!")
                 else
-                    warn("[TRADE][RECEIVER] Trade UI still open — force closing")
+                    warn("[TRADE][RECEIVER] Trade UI still open after 60s — force closing")
                     closeTrade()
-                    task.wait(0.5)
+                    task.wait(1)
                 end
             end
 
-            task.wait(0.5)
+            -- Post-trade inventory check — toggle UI to refresh counts
+            task.wait(1)
             requestInventory()
+            task.wait(1)
             toggleInventoryUI()
-            task.wait(0.5)
+            task.wait(1)
             local invAfterTrade = scanPlayerInventory()
             printInventoryDiff("[TRADE][RECEIVER] After trade with " .. CFG_SENDERS[i] .. ":", invBefore, invAfterTrade)
             invBefore = invAfterTrade
         end
     end
 
+    -- Final inventory (refresh UI first)
     requestInventory()
+    task.wait(1)
     toggleInventoryUI()
-    task.wait(0.5)
+    task.wait(1)
     local invFinal = scanPlayerInventory()
     printInventory("[TRADE][RECEIVER] Final inventory:", invFinal)
 
