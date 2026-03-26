@@ -119,7 +119,7 @@ local function resolveAutoFill()
         RECEIVERS_AUTO_FILLED = true
     end
 end
-resolveAutoFill()
+-- NOTE: resolveAutoFill() is now called inside waitForGameLoad() after Players list is ready
 
 -- Items config
 local CFG_ITEMS = type(ENV.Items) == "table" and ENV.Items or {}
@@ -139,6 +139,17 @@ local CFG_WS_CD = CFG_WS_ENABLE and (tonumber(CFG_WS.CD) or 0) or 0
 local CFG_WS_AMOUNT = CFG_WS_ENABLE and (tonumber(CFG_WS.Amount) or 0) or 0
 
 local CFG_KICK_AFTER_DONE = false -- ปิดเตะตัวเองออกหลัง trade เสร็จ เพื่อวน trade ต่อ
+
+-- isSender / isReceiver — set after resolveAutoFill() in waitForGameLoad()
+local isSender   = false
+local isReceiver = false
+
+local function nameInList(name, list)
+    for i = 1, #list do
+        if list[i] == name then return true end
+    end
+    return false
+end
 
 -- Run display script before calling done
 local function runDisplayBeforeDone()
@@ -190,16 +201,6 @@ if not ENV.TaskAfterGetItems then
               "| success:", result.success and "YES" or "NO")
     end
 end
-
-local function nameInList(name, list)
-    for i = 1, #list do
-        if list[i] == name then return true end
-    end
-    return false
-end
-
-local isSender   = nameInList(localPlayer.Name, CFG_SENDERS)
-local isReceiver = nameInList(localPlayer.Name, CFG_RECEIVERS)
 
 -- =================== Remote References ===================
 local Networking = ReplicatedStorage
@@ -262,6 +263,17 @@ local function getNameList()
     return CFG_ITEMS_NAME
 end
 
+-- Navigate PlayerGui by exact path names
+local function getButtonByPath(...)
+    local current = localPlayer:FindFirstChild("PlayerGui")
+    if not current then return nil end
+    for _, name in ipairs({...}) do
+        current = current:FindFirstChild(name)
+        if not current then return nil end
+    end
+    return current
+end
+
 -- DEBUG: Print all Backpack items with attributes, children, Name
 -- Usage: getgenv().DebugBackpack()
 ENV.DebugBackpack = function()
@@ -288,15 +300,13 @@ ENV.DebugBackpack = function()
                 childStr = childStr .. c.Name .. "(" .. c.ClassName .. ")  "
             end
         end
-        -- check if matches config
-        local matched = itemMatches(item)
-        local uuid    = getItemUUID(item)
+        local uuid = getItemUUID(item)
         print("[DEBUG] [" .. i .. "] Class=" .. item.ClassName .. " Name=" .. item.Name)
         print("        Attrs: " .. (attrStr ~= "" and attrStr or "(none)"))
         if childStr ~= "" then
             print("        Children: " .. childStr)
         end
-        print("        Match=" .. tostring(matched) .. " UUID=" .. tostring(uuid))
+        print("        UUID=" .. tostring(uuid))
     end
     print("[DEBUG] ====== End Dump ======")
 end
@@ -312,10 +322,8 @@ ENV.DebugFindTradeComplete = function()
     for _, desc in ipairs(pg:GetDescendants()) do
         if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Text ~= "" then
             local txt = desc.Text:gsub("<[^>]+>", "")
-            -- Only match text containing "completed" or "success"
             local lo = txt:lower()
             if lo:find("completed") or lo:find("success") then
-                -- Check visibility chain
                 local node = desc
                 local allVisible = true
                 local path = ""
@@ -400,7 +408,6 @@ local function collectUUIDs(limit)
     local result = {}
     local children = backpack:GetChildren()
 
-    -- Calculate how many more WS we can still collect
     local wsAllowed = math.huge
     if CFG_WS_CD > 0 and CFG_WS_AMOUNT > 0 then
         local currentWS = countWaveShields(localPlayer)
@@ -466,17 +473,13 @@ local function waitForReceivers(timeoutSec)
     local deadline = tick() + timeoutSec
     local stableCount = 0
     local lastFoundCount = 0
-    -- Adjust stable-wait based on current server size:
-    -- many players = likely everyone is here, short wait
-    -- few/no players = wait longer for joins
     local function getStableTarget()
         local total = #Players:GetPlayers()
-        if total >= 6 then return 2 end  -- big server, 2s stable
-        if total >= 3 then return 3 end  -- medium, 3s
-        return 5                          -- small/empty, 5s
+        if total >= 6 then return 2 end
+        if total >= 3 then return 3 end
+        return 5
     end
     while tick() < deadline do
-        -- Re-resolve auto-fill if receivers were auto-filled (new players may have joined)
         if RECEIVERS_AUTO_FILLED then
             local exclude = {}
             for _, name in ipairs(CFG_SENDERS) do exclude[name] = true end
@@ -493,7 +496,6 @@ local function waitForReceivers(timeoutSec)
         end
         local found = getReceiverPlayers()
         if #found > 0 and #found == #CFG_RECEIVERS then
-            -- For auto-fill: wait for player count to stabilize before returning
             if RECEIVERS_AUTO_FILLED then
                 if #found == lastFoundCount then
                     stableCount = stableCount + 1
@@ -515,7 +517,6 @@ local function waitForReceivers(timeoutSec)
         end
         task.wait(1)
     end
-    -- Return whatever was found
     return getReceiverPlayers()
 end
 
@@ -535,25 +536,22 @@ local function waitForReceiverReady(receiver, maxWait)
     local deadline = tick() + maxWait
     while tick() < deadline do
         if not Players:FindFirstChild(receiver.Name) then
-            return false -- left server
+            return false
         end
         local char = receiver.Character
         if char and char:FindFirstChild("HumanoidRootPart") then
-            -- Character loaded, short wait for scripts to initialize
             task.wait(2)
             return true
         end
         task.wait(1)
     end
-    -- Timed out but player still here, try anyway
     return Players:FindFirstChild(receiver.Name) ~= nil
 end
 
--- Wait for at least 1 Sender to join (timeout)
+-- Wait for at least 1 Sender to join (no timeout)
 local function waitForAnySender()
     print("[TRADE] Waiting for sender(s) to join (no timeout)...")
     while true do
-        -- Re-resolve auto-fill if senders were auto-filled (new players may have joined)
         if SENDERS_AUTO_FILLED then
             local exclude = {}
             for _, name in ipairs(CFG_RECEIVERS) do exclude[name] = true end
@@ -576,17 +574,6 @@ end
 
 
 -- =================== SENDER Logic ===================
-
--- Navigate PlayerGui by exact path names
-local function getButtonByPath(...)
-    local current = localPlayer:FindFirstChild("PlayerGui")
-    if not current then return nil end
-    for _, name in ipairs({...}) do
-        current = current:FindFirstChild(name)
-        if not current then return nil end
-    end
-    return current
-end
 
 -- Read backpack capacity from BagCountLabel UI (local player only)
 local function getBackpackCapacity()
@@ -636,7 +623,6 @@ local function clickButton(btn, label)
     end
     print("[TRADE]", label, "button:", btn:GetFullName(), "| Class:", btn.ClassName)
 
-    -- Method 1: getconnections — call callbacks directly (most reliable)
     local clicked = false
     if not clicked then
         local ok = pcall(function()
@@ -666,7 +652,6 @@ local function clickButton(btn, label)
     end
     if clicked then return true end
 
-    -- Method 2: firesignal
     if not clicked then
         local ok = pcall(function() firesignal(btn.Activated) end)
         if ok then clicked = true; print("[TRADE]", label, "→ firesignal(Activated)") end
@@ -677,14 +662,12 @@ local function clickButton(btn, label)
     end
     if clicked then return true end
 
-    -- Method 3: fireclick
     if not clicked then
         local ok = pcall(function() fireclick(btn) end)
         if ok then clicked = true; print("[TRADE]", label, "→ fireclick()") end
     end
     if clicked then return true end
 
-    -- Method 4: VirtualInputManager — simulate mouse click on button position
     if not clicked then
         local ok = pcall(function()
             local vim = game:GetService("VirtualInputManager")
@@ -705,17 +688,14 @@ local function clickButton(btn, label)
 end
 
 -- Click Accept to confirm trade (2nd accept — Menus.Trade.Accept)
--- Fires once, no spam (toggled on/off)
 local function fireReady(itemCount)
     local btn = findTradeConfirmButton()
     if btn then
-        -- Wait for cooldown to finish
         for waitLoop = 1, 15 do
             if btn.Visible == false then
                 if waitLoop == 1 then print("[TRADE] Trade.Accept not visible yet, waiting...") end
                 task.wait(0.5)
             else
-                -- Check TextLabel child for "(N)" cooldown
                 local hasCooldown = false
                 for _, child in ipairs(btn:GetDescendants()) do
                     if child:IsA("TextLabel") and child.Text and child.Text:find("%(") then
@@ -737,8 +717,6 @@ local function fireReady(itemCount)
 end
 
 -- Click Accept on trade request (1st accept — TradeRequest.Main.Accept)
--- hasPeers: optional function that returns true if relevant players are still in server
--- If hasPeers provided: wait forever while peers exist, start timeoutSec only when peers gone
 local function clickAcceptTradeRequest(timeoutSec, hasPeers)
     timeoutSec = timeoutSec or 120
     local btn = findTradeRequestButton()
@@ -747,16 +725,12 @@ local function clickAcceptTradeRequest(timeoutSec, hasPeers)
         return false
     end
 
-    -- Get TradeRequest parent frame for visibility check
     local tradeRequestFrame = getButtonByPath("TradeRequest")
     local mainFrame = getButtonByPath("TradeRequest", "Main")
 
-    -- Wait for popup to appear
-    local nopeersDeadline = nil -- starts when all peers leave
+    local nopeersDeadline = nil
     local printed = false
     while true do
-        -- Check if popup is visible
-        -- ScreenGui uses Enabled, Frame/Button uses Visible
         local isShowing = true
         if tradeRequestFrame then
             if tradeRequestFrame:IsA("ScreenGui") then
@@ -770,18 +744,17 @@ local function clickAcceptTradeRequest(timeoutSec, hasPeers)
 
         if isShowing then
             print("[TRADE] Trade request popup appeared! Clicking Accept...")
-            task.wait(0.3) -- Wait for animation
+            task.wait(0.3)
             local ok = clickButton(btn, "TradeRequest.Accept")
             if ok then return true end
             warn("[TRADE] TradeRequest.Accept click failed")
             return false
         end
 
-        -- Timeout logic: if timeoutSec is nil → wait forever
         if timeoutSec then
             if hasPeers then
                 if hasPeers() then
-                    nopeersDeadline = nil -- reset timer, peers still here
+                    nopeersDeadline = nil
                 else
                     if not nopeersDeadline then
                         nopeersDeadline = tick() + timeoutSec
@@ -793,7 +766,6 @@ local function clickAcceptTradeRequest(timeoutSec, hasPeers)
                     end
                 end
             else
-                -- No hasPeers function → simple fixed timeout
                 if not nopeersDeadline then
                     nopeersDeadline = tick() + timeoutSec
                 end
@@ -803,7 +775,6 @@ local function clickAcceptTradeRequest(timeoutSec, hasPeers)
                 end
             end
         end
-        -- timeoutSec == nil → wait forever (no timeout)
 
         if not printed then
             print("[TRADE] Waiting for trade request popup...", hasPeers and "(unlimited while peers online)" or ("(timeout: " .. timeoutSec .. "s)"))
@@ -817,7 +788,6 @@ end
 local function dismissTradeUI()
     local tradeFrame = getButtonByPath("Menus", "Trade")
     if not tradeFrame then return false end
-    -- Check if visible
     local isVisible = true
     if tradeFrame:IsA("ScreenGui") then
         isVisible = tradeFrame.Enabled ~= false
@@ -825,7 +795,6 @@ local function dismissTradeUI()
         isVisible = tradeFrame.Visible ~= false
     end
     if not isVisible then return false end
-    -- Try known button names
     for _, name in ipairs({"Decline", "Close", "Cancel", "X"}) do
         local btn = tradeFrame:FindFirstChild(name)
         if btn and (btn:IsA("TextButton") or btn:IsA("ImageButton")) then
@@ -835,7 +804,6 @@ local function dismissTradeUI()
             return true
         end
     end
-    -- Search descendants
     for _, desc in ipairs(tradeFrame:GetDescendants()) do
         local lo = desc.Name:lower()
         if (lo:find("decline") or lo:find("close") or lo:find("cancel"))
@@ -850,7 +818,6 @@ local function dismissTradeUI()
 end
 
 -- Wait for "Trade Completed!" TextLabel to appear (poll-based)
--- Returns true if found, false on timeout
 local function waitForTradeCompleted(timeoutSec)
     timeoutSec = timeoutSec or 20
     local pg = localPlayer:FindFirstChild("PlayerGui")
@@ -862,7 +829,6 @@ local function waitForTradeCompleted(timeoutSec)
             if desc:IsA("TextLabel") and desc.Visible and desc.Text then
                 local txt = desc.Text:gsub("<[^>]+>", "")
                 if txt:lower():find("trade completed") then
-                    -- Check parent chain visibility
                     local node = desc.Parent
                     local allVis = true
                     while node and node ~= pg do
@@ -891,8 +857,6 @@ local function waitForTradeCompleted(timeoutSec)
 end
 
 -- Poll backpack until item count changes
--- direction = "decrease" (sender) or "increase" (receiver)
--- Returns: changed (bool), currentCount
 local function waitForBackpackChange(targetPlayer, beforeCount, direction, timeoutSec)
     timeoutSec = timeoutSec or 10
     local deadline = tick() + timeoutSec
@@ -924,7 +888,6 @@ local function getActualTokenBalance()
         return 0
     end
     local txt = obj.Text or ""
-    -- Remove commas/spaces from formatted numbers like "1,000" or "1 000"
     local cleaned = txt:gsub("[,%s]", "")
     local num = tonumber(cleaned:match("%d+"))
     print("[TRADE] Token HUD text:", txt, "→ parsed:", num or 0)
@@ -932,13 +895,10 @@ local function getActualTokenBalance()
 end
 
 -- Read item names from Trade UI slots
--- side = "GiveOffer" (our side) or "RecvOffer" (other player's side)
--- Returns table of item names found (skips empty slots)
 local function readTradeSlots(side)
     local offerFrame = getButtonByPath("Menus", "Trade", side)
     if not offerFrame then return {} end
 
-    -- Find ScrollingFrame with 9 Frame children (trade slots)
     local targetScroll = nil
     for _, child in ipairs(offerFrame:GetChildren()) do
         if child:IsA("ScrollingFrame") then
@@ -957,12 +917,10 @@ local function readTradeSlots(side)
     local items = {}
     for _, slotFrame in ipairs(targetScroll:GetChildren()) do
         if slotFrame:IsA("Frame") then
-            -- Find ImageButton > FooterLabel
             for _, btn in ipairs(slotFrame:GetChildren()) do
                 if btn:IsA("ImageButton") then
                     local footer = btn:FindFirstChild("FooterLabel")
                     if footer and footer:IsA("TextLabel") and footer.Text and footer.Text ~= "" then
-                        -- Strip rich text tags
                         local cleanText = footer.Text:gsub("<[^>]+>", "")
                         if cleanText ~= "" then
                             table.insert(items, cleanText)
@@ -975,8 +933,7 @@ local function readTradeSlots(side)
     return items
 end
 
--- Read token amount from Trade UI (GiveOffer or RecvOffer side)
--- Path: Menus > Trade > {side} > TokensInput > TextBox > .Text
+-- Read token amount from Trade UI
 local function readTradeTokens(side)
     local textBox = getButtonByPath("Menus", "Trade", side, "TokensInput", "TextBox")
     if not textBox then return 0 end
@@ -989,16 +946,13 @@ end
 local function doTradeBatch(receiverPlayer, uuids)
     print("[TRADE][SENDER] Sending batch to", receiverPlayer.Name, "| items:", #uuids)
 
-    -- Dismiss any leftover trade UI from previous batch
     dismissTradeUI()
 
-    -- Check receiver still in server
     if not Players:FindFirstChild(receiverPlayer.Name) then
         warn("[TRADE][SENDER] Receiver", receiverPlayer.Name, "left the server!")
         return false
     end
 
-    -- Send Trade Request to receiver (with timeout)
     local invokeOk = false
     local invokeErr = nil
     local invokeDone = false
@@ -1024,9 +978,8 @@ local function doTradeBatch(receiverPlayer, uuids)
         return false
     end
     print("[TRADE][SENDER] Trade request sent — waiting for Trade UI to open...")
-    -- Wait for Trade UI (Menus.Trade) to open
     local tradeOpened = false
-    for waitLoop = 1, 30 do  -- max 15s (30 x 0.5s)
+    for waitLoop = 1, 30 do
         local tradeUI = getButtonByPath("Menus", "Trade")
         if tradeUI then
             local isOpen = false
@@ -1049,7 +1002,6 @@ local function doTradeBatch(receiverPlayer, uuids)
         return false, 0, "rejected"
     end
 
-    -- Place items in slots 1-9 in parallel
     for slot = 1, #uuids do
         task.spawn(function()
             pcall(function()
@@ -1057,7 +1009,6 @@ local function doTradeBatch(receiverPlayer, uuids)
             end)
         end)
     end
-    -- Poll until items appear in Trade UI (max 3s)
     local giveItems = {}
     local placeDeadline = tick() + 3
     while tick() < placeDeadline do
@@ -1071,14 +1022,12 @@ local function doTradeBatch(receiverPlayer, uuids)
         warn("[TRADE][SENDER] ✗ No items found in GiveOffer!")
     end
 
-    -- Send Token if configured and balance > 0
     local tokenOffered = false
     local tokenAmountOffered = 0
     if CFG_TOKEN_AMOUNT > 0 then
         local bal = getActualTokenBalance()
         if bal > 0 then
             local sendAmount = math.min(bal, CFG_TOKEN_AMOUNT)
-            -- Try offering tokens up to 3 times until Trade UI confirms
             local offerRetries = 3
             local uiTokens = 0
             for attempt = 1, offerRetries do
@@ -1109,7 +1058,6 @@ local function doTradeBatch(receiverPlayer, uuids)
         task.wait(0.5)
     end
 
-    -- Final check: verify Trade UI actually has something before accepting
     local finalUiItems = readTradeSlots("GiveOffer")
     local finalUiTokens = readTradeTokens("GiveOffer")
     if #finalUiItems == 0 and finalUiTokens <= 0 then
@@ -1120,30 +1068,24 @@ local function doTradeBatch(receiverPlayer, uuids)
     end
     print("[TRADE][SENDER] Trade UI confirmed:", #finalUiItems, "item(s),", finalUiTokens, "token(s) — proceeding")
 
-    -- Wait before Accept ("Trade was modified" cooldown)
     task.wait(1.5)
 
     local preAcceptCount = countItems(localPlayer)
 
-    -- Sender clicks Accept
     fireReady(#uuids)
     print("[TRADE][SENDER] Accept/Ready done!")
 
-    -- Verify trade completion: backpack decrease is the only reliable signal
-    -- "Trade Completed!" popup is secondary; Trade UI closing alone is NOT reliable
     local tradeVerified = false
     if #uuids > 0 then
         local tradeCompletedPopup = false
         local checkDeadline = tick() + 20
         while tick() < checkDeadline and not tradeVerified do
-            -- Signal 1 (primary): backpack item count decreased
             local nowCount = countItems(localPlayer)
             if nowCount < preAcceptCount then
                 print("[TRADE][SENDER] ✓ Trade verified — items:", preAcceptCount, "→", nowCount)
                 tradeVerified = true
                 break
             end
-            -- Signal 2: "Trade Completed!" popup text (remember it, but keep waiting for backpack change)
             if not tradeCompletedPopup then
                 local pg = localPlayer:FindFirstChild("PlayerGui")
                 if pg then
@@ -1159,11 +1101,9 @@ local function doTradeBatch(receiverPlayer, uuids)
                     end
                 end
             end
-            -- If Trade UI closed/hidden, stop waiting (but don't mark as verified yet)
             local tradeFrame = getButtonByPath("Menus", "Trade")
             if not tradeFrame or (tradeFrame:IsA("GuiObject") and tradeFrame.Visible == false) or
                (tradeFrame:IsA("ScreenGui") and tradeFrame.Enabled == false) then
-                -- Poll backpack until items decrease (max 5s)
                 local syncLabel = tradeCompletedPopup and "popup + " or ""
                 print("[TRADE][SENDER] Trade UI closed (", syncLabel, "polling backpack sync...)")
                 local syncDeadline = tick() + 5
@@ -1189,8 +1129,6 @@ local function doTradeBatch(receiverPlayer, uuids)
             dismissTradeUI()
         end
     else
-        -- Token-only: wait for Trade UI to close (more reliable than popup detection)
-        -- "Accepting" countdown can take 3-5s, then UI closes
         print("[TRADE][SENDER] Token-only: waiting for Trade UI to close...")
         local uiDeadline = tick() + 15
         while tick() < uiDeadline do
@@ -1223,43 +1161,38 @@ local function doTradeBatch(receiverPlayer, uuids)
 end
 
 local function runSender()
-    -- Resolve ItemsAmount: per-name * name count = total
     local initialCount  = countItems(localPlayer)
     local nameCount     = #getNameList()
     local wsCount       = countWaveShields(localPlayer)
     _initialWSCount     = wsCount
     local regularCount  = initialCount - wsCount
 
-    -- Regular items per receiver
     local regularPerReceiver
     if CFG_ITEMS_AMOUNT_RAW > 0 then
         regularPerReceiver = CFG_ITEMS_AMOUNT_RAW * nameCount
     else
-        regularPerReceiver = regularCount  -- 0 = send all regular
+        regularPerReceiver = regularCount
     end
 
-    -- WaveShield items per receiver
     local wsPerReceiver = 0
     if CFG_WS_CD > 0 then
         if CFG_WS_AMOUNT > 0 then
             wsPerReceiver = CFG_WS_AMOUNT
         else
-            wsPerReceiver = wsCount  -- 0 = send all WS
+            wsPerReceiver = wsCount
         end
     end
 
     local itemsPerReceiver = regularPerReceiver + wsPerReceiver
     if itemsPerReceiver <= 0 and initialCount > 0 then
-        itemsPerReceiver = initialCount  -- fallback: send all
+        itemsPerReceiver = initialCount
     end
-    -- Check actual token balance if config wants to send tokens
     local actualTokenBalance = 0
     if CFG_TOKEN_AMOUNT > 0 then
         actualTokenBalance = getActualTokenBalance()
         print("[TRADE][SENDER] Token config:", CFG_TOKEN_AMOUNT, "| Actual balance:", actualTokenBalance)
     end
 
-    -- No items but has token → token-only trade
     local tokenOnly = false
     if itemsPerReceiver <= 0 and initialCount <= 0 then
         if CFG_TOKEN_AMOUNT > 0 and actualTokenBalance > 0 then
@@ -1282,7 +1215,6 @@ local function runSender()
         end
     end
 
-    -- Has item config but no matching items in backpack (not token-only) → done+kick
     if not tokenOnly and initialCount <= 0 then
         local nameList = getNameList()
         local msg = "No items matching config: " .. table.concat(nameList, ", ")
@@ -1300,8 +1232,6 @@ local function runSender()
         print("[TRADE][SENDER] ItemsPerReceiver:", itemsPerReceiver, "(regular:", regularPerReceiver, "+ WS:", wsPerReceiver, ") | Receivers:", #CFG_RECEIVERS, "| backpack:", initialCount)
     end
 
-    -- Wait for all Receivers to join (max 120s)
-    -- Adjust initial wait based on server size
     local serverSize = #Players:GetPlayers()
     local recvTimeout = serverSize >= 3 and 60 or 120
     print("[TRADE][SENDER] Server has", serverSize, "player(s) — receiver timeout:", recvTimeout, "s")
@@ -1319,7 +1249,6 @@ local function runSender()
         warn("[TRADE][SENDER] Found only", #receivers, "/", #CFG_RECEIVERS, "Receivers — trading with available")
     end
 
-    -- remaining = total still needed across all receivers
     local sentPerReceiver = {}
     local totalToSend = tokenOnly and #receivers or (itemsPerReceiver * #receivers)
     if totalToSend > initialCount and not tokenOnly then
@@ -1332,20 +1261,17 @@ local function runSender()
     local MAX_RETRIES = 10
     local confirmedSent = 0
     local confirmedTokenSent = 0
-    local batchCap = 9 -- dynamic cap, reduces after consecutive fails
-    local receiverReady = {} -- track which receivers have been confirmed ready
+    local batchCap = 9
+    local receiverReady = {}
     if not tokenOnly then
         print("[TRADE][SENDER] Initial matching items in backpack:", initialCount)
     end
 
     while true do
-        -- Check if current receiver index exceeds known receivers
         if receiverIdx > #receivers then
-            -- Re-check for new players if receivers were auto-filled
             if RECEIVERS_AUTO_FILLED then
                 local exclude = {}
                 for _, name in ipairs(CFG_SENDERS) do exclude[name] = true end
-                -- Also exclude receivers already traded with
                 local existingNames = {}
                 for _, r in ipairs(receivers) do existingNames[r.Name] = true end
                 local newReceivers = {}
@@ -1365,7 +1291,6 @@ local function runSender()
                     print("[TRADE][SENDER] Found", #newReceivers, "new receiver(s) →", table.concat(
                         (function() local n={}; for _,r in ipairs(newReceivers) do table.insert(n,r.Name) end; return n end)(), ", "),
                         "| remaining:", remaining)
-                    -- Don't break, continue the loop
                 else
                     print("[TRADE][SENDER] All receivers done (no new players)")
                     break
@@ -1376,11 +1301,9 @@ local function runSender()
             end
         end
 
-        -- No more items to send
         if remaining <= 0 then break end
 
         local receiver  = receivers[receiverIdx]
-        -- ข้าม receiver ที่ trade สำเร็จแล้ว (token-only หรือ item ครบ)
         if tokenOnly and sentPerReceiver[receiverIdx] then
             receiverIdx = receiverIdx + 1
             goto continue_receiver_loop
@@ -1389,7 +1312,6 @@ local function runSender()
             goto continue_receiver_loop
         end
 
-        -- Check receiver still in server
         if not Players:FindFirstChild(receiver.Name) then
             warn("[TRADE][SENDER] Receiver", receiver.Name, "left the server — skipping")
             receiverIdx = receiverIdx + 1
@@ -1402,13 +1324,11 @@ local function runSender()
         local batchSize = 0
 
         if tokenOnly then
-            -- token-only: re-check balance before each trade
             local bal = getActualTokenBalance()
             if bal <= 0 then
                 print("[TRADE][SENDER] Token balance is 0 — no more tokens to send")
                 break
             end
-            -- ถ้าเคยส่ง token-only ให้ receiver นี้แล้ว ให้ข้าม
             if sentPerReceiver[receiverIdx] then
                 receiverIdx = receiverIdx + 1
                 goto continue_receiver_loop
@@ -1418,11 +1338,9 @@ local function runSender()
             local alreadySent = sentPerReceiver[receiverIdx] or 0
             local needForThis = itemsPerReceiver - alreadySent
             if needForThis <= 0 then
-                -- This receiver is done, skip
                 receiverIdx = receiverIdx + 1
                 retryCount = 0
             else
-                -- Check receiver's available backpack space (only if we can read capacity)
                 local bpMax = getBackpackMax()
                 local availableSpace = nil
                 if bpMax then
@@ -1471,9 +1389,7 @@ local function runSender()
             end
         end
 
-        -- Trade if batchSize > 0 or tokenOnly, otherwise skip
         if batchSize > 0 or tokenOnly then
-            -- Wait for receiver's game to load before first trade
             if not receiverReady[receiver.Name] then
                 print("[TRADE][SENDER] Waiting for", receiver.Name, "to load game...")
                 local ready = waitForReceiverReady(receiver, 30)
@@ -1496,7 +1412,6 @@ local function runSender()
 
             task.wait(1)
 
-            -- Receiver didn't accept trade request → skip to next receiver
             if tradeStatus == "rejected" then
                 warn("[TRADE][SENDER] Receiver", receiver.Name, "didn't accept trade — skipping")
                 receiverIdx = receiverIdx + 1
@@ -1510,7 +1425,6 @@ local function runSender()
                 receiverIdx = receiverIdx + 1
                 retryCount = 0
             else
-                -- Always verify by checking actual backpack count (regardless of doTradeBatch result)
                 local afterCount = countItems(localPlayer)
                 local actualSent = beforeCount - afterCount
                 print("[TRADE][SENDER] Verify: before=", beforeCount, "after=", afterCount, "sent=", actualSent)
@@ -1524,7 +1438,7 @@ local function runSender()
                     if (sentPerReceiver[receiverIdx] or 0) >= itemsPerReceiver then
                         print("[TRADE][SENDER] Receiver", receiver.Name, "got full", itemsPerReceiver, "→ next receiver")
                         receiverIdx = receiverIdx + 1
-                        batchCap = 9  -- reset for next receiver
+                        batchCap = 9
                     end
                     retryCount = 0
                     if remaining > 0 then
@@ -1532,18 +1446,14 @@ local function runSender()
                         task.wait(1.5)
                     end
                 else
-                    -- Items didn't decrease = trade failed, regardless of doTradeBatch result
                     retryCount = retryCount + 1
                     warn("[TRADE][SENDER] Backpack unchanged (", beforeCount, "→", afterCount, ") — trade failed (attempt", retryCount, "/", MAX_RETRIES, ") batchCap:", batchCap)
-                    -- Reduce batch cap after every 2 consecutive fails (receiver might be near full)
                     if retryCount % 2 == 0 and batchCap > 1 then
                         batchCap = math.max(1, math.floor(batchCap / 2))
                         print("[TRADE][SENDER] Reducing batch cap to", batchCap, "(receiver may be near full)")
                     end
-                    -- Dismiss any leftover trade UI
                     dismissTradeUI()
                     if retryCount >= MAX_RETRIES then
-                        -- Check total backpack vs initial for untracked sends
                         local nowTotal = countItems(localPlayer)
                         local totalDisappeared = initialCount - nowTotal
                         local untracked = totalDisappeared - confirmedSent
@@ -1556,14 +1466,14 @@ local function runSender()
                             warn("[TRADE][SENDER] Max retries", MAX_RETRIES, "with no progress — skipping to next receiver")
                             receiverIdx = receiverIdx + 1
                             retryCount = 0
-                            batchCap = 9  -- reset for next receiver
+                            batchCap = 9
                         end
                     else
                         task.wait(1.5)
                     end
                 end
             end
-            end -- receiverReady else block
+            end
         end
         ::continue_receiver_loop::
     end
@@ -1577,21 +1487,16 @@ local function runSender()
         warn("[TRADE][SENDER] Trade incomplete —", remaining, "item(s) remaining")
     end
 
-    -- Done + Kick
-    -- Auto-filled side = alts → kick. Explicitly set side = main → stay.
-    -- If neither auto-filled: sender kicks for many→1, receiver kicks otherwise.
-    -- Also: if no matching items left in backpack → always done + kick
     if CFG_KICK_AFTER_DONE and tradeOk then
         local shouldKick
         if SENDERS_AUTO_FILLED then
-            shouldKick = true  -- sender is alt (auto-filled) → kick
+            shouldKick = true
         elseif RECEIVERS_AUTO_FILLED then
-            shouldKick = false -- sender is main (explicitly set) → stay
+            shouldKick = false
         else
             shouldKick = (#CFG_SENDERS > 1 and #CFG_RECEIVERS == 1)
         end
 
-        -- If no matching items left → always done + kick regardless
         local remainingItems = countItems(localPlayer)
         if remainingItems <= 0 and not tokenOnly then
             print("[TRADE][SENDER] No matching items left in backpack → done + kick")
@@ -1607,7 +1512,6 @@ local function runSender()
         end
     end
 
-    -- If trade failed and KickAfterDone → done + kick (receiver backpack full is still a valid completion)
     if CFG_KICK_AFTER_DONE and not tradeOk then
         callDone()
         local msg = "Trade incomplete — sent " .. confirmedSent .. " / " .. totalToSend
@@ -1621,16 +1525,14 @@ end
 -- =================== RECEIVER Logic ===================
 
 local function runReceiver()
-    -- Resolve ItemsAmount: per-name * name count = total per sender
     local nameCount = #getNameList()
     local itemsPerSender
     if CFG_ITEMS_AMOUNT_RAW > 0 then
         itemsPerSender = CFG_ITEMS_AMOUNT_RAW * nameCount
     else
-        itemsPerSender = 0  -- send all mode
+        itemsPerSender = 0
     end
 
-    -- Include WaveShield items in expected count
     local wsPerSender = 0
     if CFG_WS_CD > 0 and CFG_WS_AMOUNT > 0 then
         wsPerSender = CFG_WS_AMOUNT
@@ -1644,17 +1546,14 @@ local function runReceiver()
           "| Items per sender:", itemsPerSender > 0 and itemsPerSender or "ALL",
           CFG_WS_CD > 0 and ("(incl WS:" .. wsPerSender .. ")") or "")
 
-    -- Wait for at least 1 Sender to join (no timeout)
     local senderPlayers = waitForAnySender()
     print("[TRADE][RECEIVER] Found Senders:", #senderPlayers, "/", #CFG_SENDERS)
 
-    -- Calculate expected items
     local totalNeeded
     local tokenOnlyMode = false
     if itemsPerSender > 0 then
         totalNeeded = itemsPerSender * #senderPlayers
     else
-        -- send-all mode: count sender backpacks
         local senderItemCount = 0
         for _, sender in ipairs(senderPlayers) do
             local c = countItems(sender)
@@ -1677,17 +1576,14 @@ local function runReceiver()
         end
     end
 
-    -- totalRounds: only used as cap when we know exact amount; otherwise unlimited
     local totalRounds
     if totalNeeded > 0 then
         local batchesPerSender = math.ceil((itemsPerSender > 0 and itemsPerSender or 9) / 9)
         totalRounds = batchesPerSender * #senderPlayers
-        -- Add buffer rounds for safety (trade failures, retries)
         totalRounds = totalRounds + math.max(3, math.ceil(totalRounds * 0.5))
     else
-        totalRounds = nil -- unlimited (token-only / send-all)
+        totalRounds = nil
     end
-    -- WaveShield with unknown amount → don't cap rounds
     if CFG_WS_CD > 0 and CFG_WS_AMOUNT <= 0 then
         totalRounds = nil
     end
@@ -1705,7 +1601,6 @@ local function runReceiver()
         round = round + 1
         if totalRounds and round > totalRounds then break end
 
-        -- Check backpack capacity before accepting trade
         local curCap, maxCap = getBackpackCapacity()
         if curCap and maxCap then
             local space = maxCap - curCap
@@ -1717,14 +1612,12 @@ local function runReceiver()
             print("[TRADE][RECEIVER] Backpack:", curCap, "/", maxCap, "| available:", space)
         end
 
-        -- Calculate expected batch size for this round
         local expectedBatch
         if totalNeeded > 0 then
             local remaining = totalNeeded - totalReceived
             if remaining <= 0 then break end
             expectedBatch = math.min(remaining, 9)
         else
-            -- send-all mode: adaptive batch size
             if hasReceivedItems then
                 expectedBatch = 9
             else
@@ -1734,17 +1627,14 @@ local function runReceiver()
 
         print("[TRADE][RECEIVER] Round", round, "/", (totalRounds or "~"), "| expected batch:", expectedBatch)
 
-        -- 1st Accept: Wait for trade request popup (no timeout)
         print("[TRADE][RECEIVER] Waiting for trade request...")
         local gotRequest = clickAcceptTradeRequest(nil, nil)
         if not gotRequest then
             warn("[TRADE][RECEIVER] Trade request accept failed — retrying")
         else
 
-        -- Count items before trade
         local beforeCount = countItems(localPlayer)
 
-        -- 2nd Accept: Poll until sender places items (or accepts), max 20s
         print("[TRADE][RECEIVER] Waiting for Sender to place items...")
         local recvItems = {}
         local recvTokens = 0
@@ -1756,14 +1646,12 @@ local function runReceiver()
             recvTokens = readTradeTokens("RecvOffer")
             local hasContent = #recvItems > 0 or recvTokens > 0
             if hasContent then
-                -- Items appeared — wait for count to stabilize (sender may still be placing)
                 if #recvItems == lastItemCount then
                     stableCount = stableCount + 1
                 else
                     stableCount = 0
                     lastItemCount = #recvItems
                 end
-                -- Stable for 1.5s (3 checks) = sender is done placing
                 if stableCount >= 3 then
                     break
                 end
@@ -1780,7 +1668,6 @@ local function runReceiver()
         end
         if recvTokens > 0 then
             print("[TRADE][RECEIVER] ✓ Sender offered:", recvTokens, "token(s)")
-            -- Force done+kick immediately after receiving token (token-only trade)
             print("[TRADE][RECEIVER] Token trade detected: Calling done + kick (force, always)")
             callDone()
             task.wait(2)
@@ -1792,7 +1679,6 @@ local function runReceiver()
             warn("[TRADE][RECEIVER] ✗ Token-only mode but RecvOffer shows 0 tokens!")
         end
 
-        -- If nothing offered (0 items + 0 tokens in UI) → decline trade
         local skipRound = false
         if #recvItems == 0 and recvTokens <= 0 then
             warn("[TRADE][RECEIVER] Sender offered nothing (0 items, 0 tokens) — declining")
@@ -1808,7 +1694,6 @@ local function runReceiver()
 
         if not skipRound then
 
-        -- Check if offered items would overflow receiver's backpack
         if not tokenOnlyMode and #recvItems > 0 then
             local curCap, maxCap = getBackpackCapacity()
             if curCap and maxCap then
@@ -1834,14 +1719,12 @@ local function runReceiver()
             end
         end
 
-        end -- first if not skipRound
+        end
         if not skipRound then
 
-        -- Receiver clicks Accept
         fireReady(expectedBatch)
         print("[TRADE][RECEIVER] 2nd Accept: Ready done!")
 
-        -- Verify trade completion via backpack change
         if not tokenOnlyMode then
             local changed, postCount = waitForBackpackChange(localPlayer, beforeCount, "increase", 10)
             if changed then
@@ -1850,7 +1733,6 @@ local function runReceiver()
                 warn("[TRADE][RECEIVER] Items didn't increase — trade may have failed")
             end
         else
-            -- Token-only: wait for Trade UI to close
             print("[TRADE][RECEIVER] Token-only: waiting for Trade UI to close...")
             local tokenVerified = false
             local uiDeadline = tick() + 15
@@ -1881,7 +1763,6 @@ local function runReceiver()
         end
         task.wait(1)
 
-        -- Check if items were actually received
         local afterCount = countItems(localPlayer)
         local gained     = afterCount - beforeCount
         totalReceived    = totalReceived + math.max(0, gained)
@@ -1895,12 +1776,11 @@ local function runReceiver()
             else
             consecutiveFail = consecutiveFail + 1
             warn("[TRADE][RECEIVER] Round", round, "no items gained — trade likely failed (fail", consecutiveFail, ")")
-            -- Safety: if way too many fails, still stop
             if consecutiveFail >= 15 then
                 warn("[TRADE][RECEIVER]", consecutiveFail, "consecutive fails — stopping")
                 break
             end
-            end -- else (not tokenOnlyMode)
+            end
         else
             consecutiveFail = 0
             if totalNeeded > 0 and totalReceived >= totalNeeded then
@@ -1909,7 +1789,6 @@ local function runReceiver()
             end
         end
 
-        -- Check if backpack is now full after this round
         local curCap2, maxCap2 = getBackpackCapacity()
         if curCap2 and maxCap2 and curCap2 >= maxCap2 then
             print("[TRADE][RECEIVER] Backpack is full after this round (", curCap2, "/", maxCap2, ") — stopping")
@@ -1917,11 +1796,10 @@ local function runReceiver()
             break
         end
 
-        end -- if not skipRound
-        end -- gotRequest else
+        end
+        end
     end
 
-    -- === Final verification (backpack before/after comparison) ===
     task.wait(1)
     local finalCount = countItems(localPlayer)
     local verifiedGain = finalCount - initialReceiverCount
@@ -1929,7 +1807,6 @@ local function runReceiver()
     print("[TRADE][RECEIVER] Backpack: before=", initialReceiverCount, "after=", finalCount, "gained=", verifiedGain)
     print("[TRADE][RECEIVER] Per-round total:", totalReceived, "| Backpack verify:", verifiedGain)
 
-    -- Use verifiedGain as authoritative (more accurate than per-round delta)
     local actualItems = math.max(verifiedGain, 0)
     local itemsOk = false
     if totalNeeded > 0 then
@@ -1956,13 +1833,11 @@ local function runReceiver()
         return
     end
 
-    -- Partial success: got some items + tokens were configured
     local partialOk = (not itemsOk) and (actualItems > 0) and (CFG_TOKEN_AMOUNT > 0)
     if partialOk then
         print("[TRADE][RECEIVER] ✓ Partial success: got", actualItems, "item(s) + tokens", CFG_TOKEN_AMOUNT)
     end
 
-    -- Backpack full: treat as success if we received any items
     if backpackFull and actualItems > 0 then
         itemsOk = true
         print("[TRADE][RECEIVER] ✓ Backpack full — received", actualItems, "item(s) before full")
@@ -1986,20 +1861,15 @@ local function runReceiver()
         task.spawn(ENV.TaskAfterGetItems, result)
     end
 
-    -- Done + Kick
-    -- Only done+kick when ItemsAmount > 0 (known target).
-    -- ItemsAmount = 0 (send-all) → skip done+kick (receiver doesn't know when done).
-    -- Auto-filled side = alts → kick. Explicitly set side = main → stay.
-    -- If neither auto-filled: receiver kicks unless many→1.
     local knowsTarget = CFG_ITEMS_AMOUNT_RAW > 0
         or (CFG_WS_CD > 0 and CFG_WS_AMOUNT > 0)
         or tokenOnlyMode
     if CFG_KICK_AFTER_DONE and isSuccess and knowsTarget then
         local shouldKick
         if RECEIVERS_AUTO_FILLED then
-            shouldKick = true  -- receiver is alt (auto-filled) → kick
+            shouldKick = true
         elseif SENDERS_AUTO_FILLED then
-            shouldKick = false -- receiver is main (explicitly set) → stay
+            shouldKick = false
         else
             shouldKick = not (#CFG_SENDERS > 1 and #CFG_RECEIVERS == 1)
         end
@@ -2018,7 +1888,6 @@ local function runReceiver()
         end
     end
 
-    -- Backpack full but KickAfterDone not set or not isSuccess → still done+kick if backpack full
     if backpackFull and not (CFG_KICK_AFTER_DONE and isSuccess) then
         print("[TRADE][RECEIVER] Backpack is full — calling done + kick")
         callDone()
@@ -2034,21 +1903,35 @@ end
 
 local function waitForGameLoad()
     print("[TRADE] Waiting for game data to load...")
+
+    -- ==== FIX: รอ Players list พร้อมก่อน auto-fill ====
+    local playerDeadline = tick() + 15
+    while tick() < playerDeadline do
+        if #Players:GetPlayers() > 0 then break end
+        task.wait(0.5)
+    end
+
+    -- ==== รัน resolveAutoFill ตอนนี้ (Players พร้อมแล้ว) ====
+    resolveAutoFill()
+
+    -- ==== re-check isSender / isReceiver หลัง auto-fill ====
+    isSender   = nameInList(localPlayer.Name, CFG_SENDERS)
+    isReceiver = nameInList(localPlayer.Name, CFG_RECEIVERS)
+    print("[TRADE] Role: isSender=", isSender, "| isReceiver=", isReceiver)
+
     -- Wait for Backpack to exist
     local backpack = localPlayer:WaitForChild("Backpack", 30)
     if backpack then
-        -- Wait for items to appear (up to 10s), in case just joined
         local deadline = tick() + 10
         local lastCount = -1
         while tick() < deadline do
             local c = #backpack:GetChildren()
             if c > 0 and c == lastCount then
-                break -- items stabilized
+                break
             end
             lastCount = c
             task.wait(1)
         end
-        -- Extra stabilization
         task.wait(2)
     end
     -- Wait for token HUD to appear if config needs tokens
