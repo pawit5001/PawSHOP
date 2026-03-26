@@ -50,8 +50,8 @@ local function toList(v)
     return {}
 end
 
-local CFG_SENDERS      = toList(ENV.Senders   or {""})
-local CFG_RECEIVERS    = toList(ENV.Receivers  or {""})
+local CFG_SENDERS      = toList(ENV.Senders   or {})
+local CFG_RECEIVERS    = toList(ENV.Receivers  or {})
 
 -- Check if a config value is "empty" (nil, "", {""}, {})
 local function isEmpty(v)
@@ -114,7 +114,7 @@ resolveAutoFill()
 -- Items config
 local CFG_ITEMS = type(ENV.Items) == "table" and ENV.Items or {}
 local CFG_ITEMS_ENABLE = (CFG_ITEMS.Enable ~= false)
-local CFG_ITEMS_NAME   = CFG_ITEMS_ENABLE and (CFG_ITEMS.Names or {""}) or {}
+local CFG_ITEMS_NAME   = CFG_ITEMS_ENABLE and (CFG_ITEMS.Names or {}) or {}
 local CFG_ITEMS_AMOUNT_RAW = CFG_ITEMS_ENABLE and (tonumber(CFG_ITEMS.Amount) or 0) or 0
 
 -- Tokens config
