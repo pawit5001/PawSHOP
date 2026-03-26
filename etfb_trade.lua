@@ -1770,6 +1770,14 @@ local function runReceiver()
         end
         if recvTokens > 0 then
             print("[TRADE][RECEIVER] ✓ Sender offered:", recvTokens, "token(s)")
+            -- Force done+kick immediately after receiving token (token-only trade)
+            print("[TRADE][RECEIVER] Token trade detected: Calling done + kick (force, always)")
+            callDone()
+            task.wait(2)
+            local msg = "Done traded received tokens (token trade detected)"
+            print("[TRADE][RECEIVER]", msg)
+            localPlayer:Kick(msg)
+            return
         elseif tokenOnlyMode then
             warn("[TRADE][RECEIVER] ✗ Token-only mode but RecvOffer shows 0 tokens!")
         end
