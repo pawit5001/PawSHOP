@@ -45,8 +45,15 @@ local localPlayer = Players.LocalPlayer
 local ENV = getgenv()
 
 local function toList(v)
-    if type(v) == "string" then return {v} end
-    if type(v) == "table"  then return v   end
+    if v == nil then return {} end
+    if type(v) == "string" then
+        if v == "" then return {} end
+        return {v}
+    end
+    if type(v) == "table" then
+        if #v == 1 and v[1] == "" then return {} end
+        return v
+    end
     return {}
 end
 
