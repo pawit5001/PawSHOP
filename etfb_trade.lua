@@ -1370,6 +1370,14 @@ local function runSender()
         if remaining <= 0 then break end
 
         local receiver  = receivers[receiverIdx]
+        -- ข้าม receiver ที่ trade สำเร็จแล้ว (token-only หรือ item ครบ)
+        if tokenOnly and sentPerReceiver[receiverIdx] then
+            receiverIdx = receiverIdx + 1
+            goto continue_receiver_loop
+        elseif not tokenOnly and sentPerReceiver[receiverIdx] and sentPerReceiver[receiverIdx] >= itemsPerReceiver then
+            receiverIdx = receiverIdx + 1
+            goto continue_receiver_loop
+        end
 
         -- Check receiver still in server
         if not Players:FindFirstChild(receiver.Name) then
@@ -1389,6 +1397,11 @@ local function runSender()
             if bal <= 0 then
                 print("[TRADE][SENDER] Token balance is 0 — no more tokens to send")
                 break
+            end
+            -- ถ้าเคยส่ง token-only ให้ receiver นี้แล้ว ให้ข้าม
+            if sentPerReceiver[receiverIdx] then
+                receiverIdx = receiverIdx + 1
+                goto continue_receiver_loop
             end
             batchSize = 0
         else
@@ -1481,6 +1494,7 @@ local function runSender()
                 batchCap = 9
             elseif tokenOnly then
                 confirmedTokenSent = confirmedTokenSent + (batchTokenSent or 0)
+                sentPerReceiver[receiverIdx] = (batchTokenSent or 0)
                 print("[TRADE][SENDER] Token-only trade sent to", receiver.Name, "(", batchTokenSent or 0, "tokens)")
                 remaining = remaining - 1
                 receiverIdx = receiverIdx + 1
@@ -1541,6 +1555,7 @@ local function runSender()
             end
             end -- receiverReady else block
         end
+        ::continue_receiver_loop::
     end
 
     local tradeOk = (remaining <= 0)
