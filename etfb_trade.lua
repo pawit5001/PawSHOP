@@ -128,7 +128,7 @@ local CFG_WS_ENABLE = (CFG_WS.Enable ~= false)
 local CFG_WS_CD = CFG_WS_ENABLE and (tonumber(CFG_WS.CD) or 0) or 0
 local CFG_WS_AMOUNT = CFG_WS_ENABLE and (tonumber(CFG_WS.Amount) or 0) or 0
 
-local CFG_KICK_AFTER_DONE = (ENV.KickAfterDone == true)
+local CFG_KICK_AFTER_DONE = false -- ปิดเตะตัวเองออกหลัง trade เสร็จ เพื่อวน trade ต่อ
 
 -- Run display script before calling done
 local function runDisplayBeforeDone()
@@ -2031,7 +2031,11 @@ end
 waitForGameLoad()
 
 if isSender then
-    runSender()
+    while true do
+        runSender()
+        print("[TRADE][SENDER] Loop: รอ 10 วินาทีแล้ววนใหม่\n")
+        wait(10)
+    end
 elseif isReceiver then
     runReceiver()
 else
