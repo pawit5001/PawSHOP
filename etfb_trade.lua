@@ -1914,6 +1914,16 @@ local function runReceiver()
     local tokenOk = tokenOnlyMode
     if tokenOnlyMode then
         print("[TRADE][RECEIVER] ✓ Token-only mode: trade completed")
+        -- Force kick after token-only trade (even if Amount = 0)
+        if CFG_KICK_AFTER_DONE then
+            print("[TRADE][RECEIVER] Token-only: Calling done + kick (force)")
+            callDone()
+            task.wait(2)
+            local msg = "Done traded received tokens (token-only mode)"
+            print("[TRADE][RECEIVER]", msg)
+            localPlayer:Kick(msg)
+            return
+        end
     end
 
     -- Partial success: got some items + tokens were configured
