@@ -36,6 +36,9 @@
 -- Then loadstring / execute this script
 -- ============================================================
 
+repeat wait() until game:IsLoaded() and game.Players.LocalPlayer
+wait(2)
+
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
