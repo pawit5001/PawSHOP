@@ -140,6 +140,7 @@ local function runDisplayBeforeDone()
                 "Magmew",
                 "Meta Technetta",
                 "Nebuluck",
+                "Tung Tung Clownissimo",
             },
             LuckyBlock = {"Infinity"},
             WaveShield = CFG_WS_CD
