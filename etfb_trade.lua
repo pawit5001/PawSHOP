@@ -1,5 +1,5 @@
 -- ============================================================
--- ETFB Auto Trade
+-- ETFB Auto Trade PATCHED
 -- ============================================================
 -- Usage: Set config in getgenv() before running, e.g.:
 --
