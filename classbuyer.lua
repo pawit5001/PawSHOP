@@ -1,11 +1,14 @@
 print("PawSHOP - Auto class buyer")
 
 local Players = game:GetService("Players")
-local player = Players.LocalPlayer
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RemoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents") or ReplicatedStorage:WaitForChild("RemoteEvents", 10)
 local warnedMissingRemote = {}
+
+local function getLocalPlayer()
+    return Players.LocalPlayer or Players.PlayerAdded:Wait()
+end
 
 local function getRemoteEvent(name)
     if not RemoteEvents then
@@ -40,6 +43,7 @@ local Config = getgenv().ConfigsSettings or {
 
 -- GUI (wrapped in pcall to prevent warnings)
 pcall(function()
+    local player = getLocalPlayer()
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "PawSHOPGui"
     screenGui.Parent = player:WaitForChild("PlayerGui")
@@ -65,6 +69,8 @@ local function sendWebhook(className, currentdiamond, totalClasses)
     if not Config.WEBHOOK_URL or Config.WEBHOOK_URL == "" then
         return -- skip if no webhook provided
     end
+
+    local player = getLocalPlayer()
 
     local payload = {
         username = "PawSHOP",
@@ -99,6 +105,11 @@ end
 -- Helpers
 local function getOwnedClassesSet()
     local owned = {}
+    local player = Players.LocalPlayer
+    if not player then
+        return owned
+    end
+
     local classProgress = player:FindFirstChild("ClassProgress")
     if classProgress then
         for _, c in ipairs(classProgress:GetChildren()) do
@@ -120,6 +131,7 @@ local function tryBuy(className)
 
     local ownedAfter = getOwnedClassesSet()
     if ownedAfter[className] then
+        local player = getLocalPlayer()
         local DiamondsValue = player:GetAttribute("Diamonds") or 0
         local all = {}
         for k in pairs(ownedAfter) do table.insert(all, k) end
@@ -137,6 +149,11 @@ local function checkPlayerClasses()
 end
 
 local function rerollShop()
+    local player = Players.LocalPlayer
+    if not player then
+        return
+    end
+
     local DiamondsValue = player:GetAttribute("Diamonds") or 0
     if DiamondsValue >= Config.MIN_DIAMONDS_TO_REROLL then
         local rerollPrice = player:GetAttribute("RerollPrice") or 0
