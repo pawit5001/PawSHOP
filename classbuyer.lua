@@ -4,6 +4,25 @@ local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RemoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents") or ReplicatedStorage:WaitForChild("RemoteEvents", 10)
+local warnedMissingRemote = {}
+
+local function getRemoteEvent(name)
+    if not RemoteEvents then
+        if not warnedMissingRemote.RemoteEvents then
+            warnedMissingRemote.RemoteEvents = true
+            warn("[PawSHOP] RemoteEvents folder not found in ReplicatedStorage")
+        end
+        return nil
+    end
+
+    local remote = RemoteEvents:FindFirstChild(name)
+    if not remote and not warnedMissingRemote[name] then
+        warnedMissingRemote[name] = true
+        warn("[PawSHOP] Missing remote: " .. name)
+    end
+    return remote
+end
 
 -- ======================================================
 -- CONFIG (taken from getgenv())
@@ -93,7 +112,10 @@ local function tryBuy(className)
     local ownedBefore = getOwnedClassesSet()
     if ownedBefore[className] then return false end
 
-    ReplicatedStorage.RemoteEvents.RequestPurchaseClass:FireServer(className)
+    local requestPurchaseClass = getRemoteEvent("RequestPurchaseClass")
+    if not requestPurchaseClass then return false end
+
+    requestPurchaseClass:FireServer(className)
     task.wait(1.5)
 
     local ownedAfter = getOwnedClassesSet()
@@ -119,7 +141,10 @@ local function rerollShop()
     if DiamondsValue >= Config.MIN_DIAMONDS_TO_REROLL then
         local rerollPrice = player:GetAttribute("RerollPrice") or 0
         if rerollPrice == 0 then
-            ReplicatedStorage.RemoteEvents.RequestRerollShop:FireServer()
+            local requestRerollShop = getRemoteEvent("RequestRerollShop")
+            if requestRerollShop then
+                requestRerollShop:FireServer()
+            end
         end
     end
 end
