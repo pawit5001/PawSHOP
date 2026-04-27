@@ -72,6 +72,7 @@ local AUTO_WIN_CLAIM_WINS_CHECK_WAIT = 0.35
 local AUTO_WIN_CLAIM_TP_HEIGHT = 4
 local AUTO_WIN_PUNCH_TP_MIN_DISTANCE = 18
 local AUTO_WIN_PUNCH_TP_HEIGHT = 4
+local AUTO_WIN_SCAN_TP_COOLDOWN = 1.25
 local AUTO_WIN_MOVE_LOCK_HOLD = 0.3
 local AUTO_WIN_PUNCH_STANDOFF_DISTANCE = 8
 local AUTO_WIN_CLAIM_STANDOFF_DISTANCE = 1.5
@@ -1678,6 +1679,27 @@ local function tryMoveNearPunchStage(stage)
 	return true
 end
 
+local function tryMoveNearStageForDiscovery(stage)
+	if not stage then
+		return false, "no-stage"
+	end
+
+	if stage.punchPosition then
+		if tryMoveNearPunchStage(stage) then
+			return true, "punch"
+		end
+	end
+
+	if stage.claimPosition then
+		local didTeleport = tryMoveNearClaimStage(stage)
+		if didTeleport then
+			return true, "claim"
+		end
+	end
+
+	return false, "no-position"
+end
+
 local function getAliveHumanoid(character)
 	if not character then
 		return nil
@@ -2877,6 +2899,8 @@ task.spawn(function()
 	local stageProgressByStageNumber = {}
 	local claimRetryStateByStageNumber = {}
 	local lastPunchTeleportStageNumber = nil
+	local lastScanTeleportStageNumber = nil
+	local lastScanTeleportAt = 0
 	local lastSuccessfulClaimStageNumber = nil
 	local lastSuccessfulClaimWinsValue = 0
 	local lastClaimAttemptSummary = "last=none"
@@ -2954,6 +2978,9 @@ task.spawn(function()
 				local canCheckNextStage = false
 				local latestClaimableStage = nil
 				local claimAttemptReadyAt = claimCooldownUntil
+				local scanTargetStage = nil
+				local didScanTeleport = false
+				local scanTeleportReason = nil
 
 				pendingStage, pendingAction, pendingStageIndex = getFirstPendingUnlockedStage(stages, highestUnlockedIndex)
 				latestClaimableStage = getLatestClaimableStage(stages, highestUnlockedIndex, pendingStageIndex)
@@ -3035,6 +3062,21 @@ task.spawn(function()
 						end
 						claimAttemptReadyAt = math.max(claimCooldownUntil, claimRetryState.nextAttemptAt or 0)
 					end
+				end
+
+				if not pendingStage and not claimTargetStage and currentStage and currentStage.destroyed then
+					scanTargetStage = nextStage or currentStage
+					if scanTargetStage and scanTargetStage.stageNumber then
+						local shouldAttemptScanTeleport = (now - lastScanTeleportAt) >= AUTO_WIN_SCAN_TP_COOLDOWN
+							or lastScanTeleportStageNumber ~= scanTargetStage.stageNumber
+						if shouldAttemptScanTeleport then
+							didScanTeleport, scanTeleportReason = tryMoveNearStageForDiscovery(scanTargetStage)
+							lastScanTeleportAt = now
+							lastScanTeleportStageNumber = scanTargetStage.stageNumber
+						end
+					end
+				else
+					lastScanTeleportStageNumber = nil
 				end
 				local nextStageDebugText = string.format(
 					"next=%s hp=%s destroyed=%s",
@@ -3197,7 +3239,13 @@ task.spawn(function()
 						if nextStage and nextStage.requirement and nextStage.requirement ~= math.huge and localWins < nextStage.requirement then
 							setStatusLine("win", string.format("Win: Need %s wins for stage %d (%s HP)", formatShorthandNumber(nextStage.requirement), nextStage.stageNumber, formatShorthandNumber(nextStage.health)))
 						elseif currentStage and currentStage.destroyed then
-							setStatusLine("win", string.format("Win: Scanning next stage after %d", currentStage.stageNumber))
+							if scanTargetStage and didScanTeleport then
+								setStatusLine("win", string.format("Win: Scanning stage %d after %d | moved via %s", scanTargetStage.stageNumber, currentStage.stageNumber, scanTeleportReason or "tp"))
+							elseif scanTargetStage then
+								setStatusLine("win", string.format("Win: Scanning stage %d after %d", scanTargetStage.stageNumber, currentStage.stageNumber))
+							else
+								setStatusLine("win", string.format("Win: Scanning next stage after %d", currentStage.stageNumber))
+							end
 						else
 							setStatusLine("win", "Win: Waiting stage data")
 						end
