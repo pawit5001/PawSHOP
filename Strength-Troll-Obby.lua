@@ -80,7 +80,7 @@ local AUTO_WIN_MAX_BREAK_MINUTES = 2.5
 local AUTO_WIN_EFFECTIVE_HITS_PER_SECOND = 3
 local AUTO_WIN_OBSERVED_DPS_WEIGHT = 0.75
 local AUTO_WIN_OBSERVED_DPS_SMOOTHING = 0.35
-local AUTO_WIN_DEBUG_ENABLED = true
+local AUTO_WIN_DEBUG_ENABLED = false
 local AUTO_WIN_DEBUG_INTERVAL = 1.0
 local AUTO_WIN_WAIT_TRAIN_BURST = 2
 local AUTO_KILL_SINGLE_BURST = 6
@@ -675,6 +675,91 @@ local function getStrengthBarriersFolder()
 	return obby and obby:FindFirstChild("StrengthBarriers")
 end
 
+local function isStrengthBarrierContainer(instance, root)
+	if not instance or instance == root then
+		return false
+	end
+
+	if not (instance:IsA("Model") or instance:IsA("Folder")) then
+		return false
+	end
+
+	return instance:FindFirstChild("BarrierGuiPart") ~= nil
+		or instance:FindFirstChild("Barrier") ~= nil
+		or instance:FindFirstChild("VisibleBarrier", true) ~= nil
+end
+
+local function getStrengthBarrierContainers(strengthBarriers)
+	if not strengthBarriers then
+		return {}
+	end
+
+	local containers = {}
+	for _, descendant in ipairs(strengthBarriers:GetDescendants()) do
+		if isStrengthBarrierContainer(descendant, strengthBarriers) then
+			table.insert(containers, descendant)
+		end
+	end
+
+	return containers
+end
+
+local function getInstanceDepthFromAncestor(instance, ancestor)
+	local depth = 0
+	local current = instance
+	while current and current ~= ancestor do
+		current = current.Parent
+		depth = depth + 1
+	end
+
+	return depth
+end
+
+local function getStrengthBarrierCandidateScore(candidate)
+	local score = 0
+	if candidate.stageNumber then
+		score = score + 100
+	end
+	if candidate.requirement and candidate.requirement ~= math.huge then
+		score = score + 20
+	end
+	if candidate.punchPosition then
+		score = score + 10
+	end
+	if candidate.claimPosition then
+		score = score + 8
+	end
+	if candidate.barrier and candidate.barrier:FindFirstChild("BarrierGuiPart") then
+		score = score + 6
+	end
+	if candidate.barrier and candidate.barrier:FindFirstChild("Barrier") then
+		score = score + 4
+	end
+	if candidate.barrier and candidate.barrier:FindFirstChild("VisibleBarrier") then
+		score = score + 2
+	end
+
+	return score
+end
+
+local function shouldPreferStrengthBarrierCandidate(currentCandidate, nextCandidate)
+	if not currentCandidate then
+		return true
+	end
+
+	local currentScore = getStrengthBarrierCandidateScore(currentCandidate)
+	local nextScore = getStrengthBarrierCandidateScore(nextCandidate)
+	if nextScore ~= currentScore then
+		return nextScore > currentScore
+	end
+
+	if (nextCandidate.depth or math.huge) ~= (currentCandidate.depth or math.huge) then
+		return (nextCandidate.depth or math.huge) < (currentCandidate.depth or math.huge)
+	end
+
+	return (nextCandidate.requirement or math.huge) < (currentCandidate.requirement or math.huge)
+end
+
 local function rebuildStrengthBarrierStaticCache(strengthBarriers)
 	if not strengthBarriers then
 		strengthBarrierStaticCacheData = {}
@@ -682,10 +767,11 @@ local function rebuildStrengthBarrierStaticCache(strengthBarriers)
 		return strengthBarrierStaticCacheData
 	end
 
+	local uniqueByStageNumber = {}
 	local baseList = {}
-	for _, barrier in ipairs(strengthBarriers:GetChildren()) do
+	for _, barrier in ipairs(getStrengthBarrierContainers(strengthBarriers)) do
 		local punchPosition = getBarrierPunchPosition(barrier)
-		table.insert(baseList, {
+		local candidate = {
 			barrier = barrier,
 			stageNumber = getBarrierStageNumber(barrier),
 			requirement = getBarrierWinsRequirement(barrier) or math.huge,
@@ -693,7 +779,21 @@ local function rebuildStrengthBarrierStaticCache(strengthBarriers)
 			claimPosition = getBarrierClaimPosition(barrier),
 			sortZ = punchPosition and punchPosition.Z or math.huge,
 			sortX = punchPosition and punchPosition.X or math.huge,
-		})
+			depth = getInstanceDepthFromAncestor(barrier, strengthBarriers),
+		}
+
+		if candidate.stageNumber then
+			local currentCandidate = uniqueByStageNumber[candidate.stageNumber]
+			if shouldPreferStrengthBarrierCandidate(currentCandidate, candidate) then
+				uniqueByStageNumber[candidate.stageNumber] = candidate
+			end
+		else
+			table.insert(baseList, candidate)
+		end
+	end
+
+	for _, candidate in pairs(uniqueByStageNumber) do
+		table.insert(baseList, candidate)
 	end
 
 	table.sort(baseList, function(a, b)
@@ -734,12 +834,12 @@ local function getStrengthBarrierStages()
 	end
 
 	local staticStages = strengthBarrierStaticCacheData
-	local childCount = #strengthBarriers:GetChildren()
+	local childCount = #getStrengthBarrierContainers(strengthBarriers)
 	if not staticStages or strengthBarrierStaticCacheCount ~= childCount then
 		staticStages = rebuildStrengthBarrierStaticCache(strengthBarriers)
 	else
 		for _, stage in ipairs(staticStages) do
-			if not stage.barrier or stage.barrier.Parent ~= strengthBarriers then
+			if not stage.barrier or not stage.barrier:IsDescendantOf(strengthBarriers) then
 				staticStages = rebuildStrengthBarrierStaticCache(strengthBarriers)
 				break
 			end
@@ -2628,7 +2728,7 @@ task.spawn(function()
 			if currentWeightForUpgrade and nextUpgradeWeight then
 				setStatusLine("weightcur", string.format("Current Weight: x %d | next %d gem x %d", currentWeightForUpgrade.multiplier or 0, nextUpgradeWeight.price or 0, nextUpgradeWeight.multiplier or 0))
 			elseif currentWeightForUpgrade then
-				setStatusLine("weightcur", string.format("Current Weight: x %d | next - gem x -", currentWeightForUpgrade.multiplier or 0))
+				setStatusLine("weightcur", string.format("Current Weight: x %d", currentWeightForUpgrade.multiplier or 0))
 			elseif nextUpgradeWeight then
 				setStatusLine("weightcur", string.format("Current Weight: - | next %d gem x %d", nextUpgradeWeight.price or 0, nextUpgradeWeight.multiplier or 0))
 			else
@@ -2931,7 +3031,7 @@ task.spawn(function()
 					if claimRetryState then
 						if not claimRetryState.firstEligibleAt then
 							claimRetryState.firstEligibleAt = now
-							claimRetryState.nextAttemptAt = math.max(claimRetryState.nextAttemptAt or 0, now + math.max(learnedClaimReadyDelay, AUTO_WIN_CLAIM_MIN_READY_DELAY))
+							claimRetryState.nextAttemptAt = math.max(claimRetryState.nextAttemptAt or 0, now)
 						end
 						claimAttemptReadyAt = math.max(claimCooldownUntil, claimRetryState.nextAttemptAt or 0)
 					end
@@ -3067,9 +3167,9 @@ task.spawn(function()
 
 						if shouldDelayPunchForStrength and estimatedBreakSeconds then
 							if claimTargetStage and now >= claimCooldownUntil and not claimedThisLoop then
-								setStatusLine("win", string.format("Win: Train STR + claim stage %d | ETA %.1fm", claimTargetStage.stageNumber, estimatedBreakSeconds / 60) .. nextStageStatusSuffix)
+								setStatusLine("win", string.format("Win: Train STR + claim stage %d | ETA stage %d %.1fm", claimTargetStage.stageNumber, pendingStage.stageNumber, estimatedBreakSeconds / 60) .. nextStageStatusSuffix)
 							elseif claimTargetStage and now < claimCooldownUntil then
-								setStatusLine("win", string.format("Win: Train STR (ETA %.1fm) | claim stage %d in %.1fs", estimatedBreakSeconds / 60, claimTargetStage.stageNumber, claimStatusSeconds) .. nextStageStatusSuffix)
+								setStatusLine("win", string.format("Win: Train STR for stage %d (ETA %.1fm) | claim stage %d in %.1fs", pendingStage.stageNumber, estimatedBreakSeconds / 60, claimTargetStage.stageNumber, claimStatusSeconds) .. nextStageStatusSuffix)
 							else
 								setStatusLine("win", string.format("Win: Train STR for stage %d (ETA %.1fm | need >= %s STR)", pendingStage.stageNumber, estimatedBreakSeconds / 60, formatShorthandNumber(requiredStrengthForPendingStage)) .. nextStageStatusSuffix)
 							end
